@@ -1,5 +1,3 @@
-extern crate libsoxr;
-
 use std::{
     fs::File,
     io::BufReader,
@@ -17,8 +15,8 @@ use cpal::{
     StreamConfig,
 };
 use itertools::Itertools;
-use libsoxr::{Datatype, Soxr};
 use pausable_clock::PausableClock;
+use rubato::{InterpolationParameters, Resampler, SincFixedIn};
 
 enum InStreamControl {
     Pause,
@@ -119,27 +117,23 @@ impl SourceHandler {
                             let stream_config = self.stream_config.lock().unwrap().clone();
                             let mut current = self.queue.remove(0);
                             self.current_source = Some(thread::spawn(move || {
-                                // println!("started next track");
                                 let samples = current.reader.samples().map(|e| e.unwrap());
-                                let soxr = Soxr::create(
-                                    current.sample_rate as f64,
-                                    stream_config.sample_rate.0 as f64,
-                                    2,
-                                    Some(&libsoxr::IOSpec::new(Datatype::Int32I, Datatype::Int32I)),
-                                    Some(&libsoxr::QualitySpec::new(
-                                        // use
-                                        // &libsoxr::QualityRecipe::Low,
-                                        // or
-                                        &libsoxr::QualityRecipe::Quick,
-                                        // to remove click-sound at the first second
-                                        // &libsoxr::QualityRecipe::VeryHigh,
-                                        libsoxr::QualityFlags::DOUBLE_PRECISION,
-                                    )),
-                                    // None,
-                                    Some(&libsoxr::RuntimeSpec::new(16)),
-                                )
-                                .unwrap();
-                                // for chunk in &samples.chunks(ctrack.sample_rate as usize * 2) {
+                                // println!("started next track");
+                                //
+                                // rubato
+                                let params = InterpolationParameters {
+                                    sinc_len: 2048,
+                                    f_cutoff: 0.94,
+                                    interpolation: rubato::InterpolationType::Cubic,
+                                    oversampling_factor: 1024,
+                                    window: rubato::WindowFunction::BlackmanHarris2,
+                                };
+                                let mut resampler = SincFixedIn::<f32>::new(
+                                    stream_config.sample_rate.0 as f64 / current.sample_rate as f64,
+                                    params,
+                                    current.sample_rate as usize,
+                                    current.nchannels,
+                                );
                                 for chunk in &samples
                                     // .skip(current.sample_rate as usize * 150 * 2)
                                     .chunks(current.sample_rate as usize * 2)
@@ -150,31 +144,45 @@ impl SourceHandler {
                                             InSourceControl::StopStream => return,
                                         }
                                     }
-                                    let chunk = chunk.collect_vec();
-                                    let mut output =
-                                        vec![0; stream_config.sample_rate.0 as usize * 2];
-                                    soxr.process(Some(&chunk), &mut output).unwrap();
-                                    for sample in &output {
-                                        match current.bits_per_sample.cmp(&24) {
-                                            std::cmp::Ordering::Equal => {
-                                                ttx.send(*sample as f32).unwrap()
+                                    // let chunk = chunk.collect_vec();
+                                    let mut left = vec![];
+                                    let mut right = vec![];
+                                    let mut f = false;
+                                    for el in chunk {
+                                        if !f {
+                                            match current.bits_per_sample.cmp(&24) {
+                                                std::cmp::Ordering::Equal => left.push(el as f32),
+                                                std::cmp::Ordering::Greater => left.push(
+                                                    (el >> (current.bits_per_sample - 24)) as f32,
+                                                ),
+                                                std::cmp::Ordering::Less => left.push(
+                                                    (el << (24 - current.bits_per_sample)) as f32,
+                                                ),
                                             }
-                                            std::cmp::Ordering::Greater => ttx
-                                                .send(
-                                                    (*sample >> (current.bits_per_sample - 24))
-                                                        as f32,
-                                                )
-                                                .unwrap(),
-                                            std::cmp::Ordering::Less => ttx
-                                                .send(
-                                                    (*sample << (24 - current.bits_per_sample))
-                                                        as f32,
-                                                )
-                                                .unwrap(),
+                                            f = true;
+                                        } else {
+                                            match current.bits_per_sample.cmp(&24) {
+                                                std::cmp::Ordering::Equal => right.push(el as f32),
+                                                std::cmp::Ordering::Greater => right.push(
+                                                    (el >> (current.bits_per_sample - 24)) as f32,
+                                                ),
+                                                std::cmp::Ordering::Less => right.push(
+                                                    (el << (24 - current.bits_per_sample)) as f32,
+                                                ),
+                                            };
+                                            f = false;
                                         }
                                     }
+                                    left.resize(current.sample_rate as usize, 0.0);
+                                    right.resize(current.sample_rate as usize, 0.0);
+                                    let chunk = vec![left, right];
+
+                                    let out = resampler.process(&chunk).unwrap();
+                                    let out = out[0].iter().interleave(out[1].iter()).collect_vec();
+                                    for sample in out {
+                                        ttx.send(*sample).unwrap();
+                                    }
                                 }
-                                soxr.process::<f32, _>(None, &mut [0; 100]).unwrap();
                             }))
                         }
                     }
@@ -303,7 +311,7 @@ impl Rpc {
         //     back: todo!(),
         // };
 
-        // test
+        // for demo
         let fronth = thread::spawn(|| {});
         let backh = backend.start();
 
@@ -381,7 +389,7 @@ where
 
     let err_fn = |err| eprintln!("Error building output sound stream: {}", err);
 
-    let volume = Arc::new(AtomicU8::new(35));
+    let volume = Arc::new(AtomicU8::new(100));
     let vvolume = volume.clone();
 
     let stream = device.build_output_stream(

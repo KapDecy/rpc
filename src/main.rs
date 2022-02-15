@@ -22,8 +22,7 @@ fn main() -> anyhow::Result<()> {
     println!("rpc created");
     rpc.front_tx
         .send(Control::AddTrack(
-            r"D:\From Torrent\Музыка\tydal\Album\Doja Cat\Hot Pink\05 - Doja Cat - Say So.flac"
-                .to_string(),
+            r"D:\From Torrent\Музыка\Joji - Nectar [24-44,1] (2020)\11. Pretty Boy (feat. Lil Yachty).flac".to_string(),
         ))
         .unwrap();
     println!("rpc: track_path sended");
