@@ -2,7 +2,7 @@ use std::{
     fs::File,
     io::BufReader,
     sync::{
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         mpsc::{sync_channel, Receiver, SyncSender},
         Arc, Mutex,
     },
@@ -15,7 +15,6 @@ use cpal::{
     StreamConfig,
 };
 use itertools::Itertools;
-use pausable_clock::PausableClock;
 use rubato::{InterpolationParameters, Resampler, SincFixedIn};
 
 enum InStreamControl {
@@ -27,16 +26,12 @@ enum InStreamControl {
 enum StreamControl {
     Pause,
     Resume,
-    SetVolume(u8),
 }
 
 struct Stream {
     stream_control_rx: Receiver<StreamControl>,
     stream: Box<dyn StreamTrait>,
-    volume: Arc<AtomicU8>,
-    paused: bool,
-    stream_config: Arc<Mutex<StreamConfig>>,
-    timer: Arc<PausableClock>,
+    paused: Arc<AtomicBool>,
 }
 
 impl Stream {
@@ -47,6 +42,7 @@ impl Stream {
         SyncSender<f32>,
         Arc<Mutex<StreamConfig>>,
         Arc<AtomicU8>,
+        Arc<AtomicBool>,
     ) {
         let (temp_tx, temp_rx) = sync_channel(2);
         let h = thread::spawn(move || {
@@ -55,44 +51,41 @@ impl Stream {
                 Err(_) => 0.0,
             })
             .unwrap();
+            let paused = Arc::new(AtomicBool::new(false));
             let config = Arc::new(Mutex::new(config));
             let stream = Stream {
                 stream_control_rx,
                 stream: Box::new(stream),
-                volume: volume.clone(),
-                paused: false,
-                stream_config: config.clone(),
-                timer: Arc::new(PausableClock::default()),
+                paused: paused.clone(),
             };
-            temp_tx.send((tx, config, volume)).unwrap();
+            temp_tx.send((tx, config, volume, paused)).unwrap();
             stream.stream.play().unwrap();
-            stream.timer.as_ref().pause();
             loop {
                 if let Ok(command) = stream.stream_control_rx.recv() {
                     match command {
                         StreamControl::Pause => {
                             stream.stream.pause().unwrap();
-                            stream.timer.pause();
+                            stream.paused.store(true, Ordering::SeqCst)
                         }
                         StreamControl::Resume => {
                             stream.stream.play().unwrap();
-                            stream.timer.resume();
+                            stream.paused.store(false, Ordering::SeqCst)
                         }
-                        StreamControl::SetVolume(v) => stream.volume.store(v, Ordering::SeqCst),
                     }
                 }
             }
         });
-        let (tx, config, volume) = temp_rx.recv().unwrap();
+        let (tx, config, volume, paused) = temp_rx.recv().unwrap();
         drop(temp_rx);
-        (h, tx, config, volume)
+        (h, tx, config, volume, paused)
     }
 }
 
 enum InSourceControl {
     StopStream,
-    Todo,
 }
+
+pub enum SourceResponse {}
 
 struct SourceHandler {
     source_control_rx: Receiver<SourceControl>,
@@ -100,7 +93,7 @@ struct SourceHandler {
     sample_tx: SyncSender<f32>,
     in_source_control_tx: Option<SyncSender<InSourceControl>>,
     current_source: Option<JoinHandle<()>>,
-    queue: Vec<Source>,
+    current_timer: Arc<AtomicUsize>,
 }
 
 impl SourceHandler {
@@ -108,83 +101,80 @@ impl SourceHandler {
         thread::spawn(move || loop {
             if let Ok(control) = self.source_control_rx.recv() {
                 match control {
-                    SourceControl::Todo => todo!(),
-                    SourceControl::NextTrack => {
-                        if !self.queue.is_empty() {
-                            let (tx, rx) = sync_channel(3);
-                            self.in_source_control_tx = Some(tx);
-                            let ttx = self.sample_tx.clone();
-                            let stream_config = self.stream_config.lock().unwrap().clone();
-                            let mut current = self.queue.remove(0);
-                            self.current_source = Some(thread::spawn(move || {
-                                let samples = current.reader.samples().map(|e| e.unwrap());
-                                // println!("started next track");
-                                //
-                                // rubato
-                                let params = InterpolationParameters {
-                                    sinc_len: 2048,
-                                    f_cutoff: 0.94,
-                                    interpolation: rubato::InterpolationType::Cubic,
-                                    oversampling_factor: 1024,
-                                    window: rubato::WindowFunction::BlackmanHarris2,
-                                };
-                                let mut resampler = SincFixedIn::<f32>::new(
-                                    stream_config.sample_rate.0 as f64 / current.sample_rate as f64,
-                                    params,
-                                    current.sample_rate as usize,
-                                    current.nchannels,
-                                );
-                                for chunk in &samples
-                                    // .skip(current.sample_rate as usize * 150 * 2)
-                                    .chunks(current.sample_rate as usize * 2)
-                                {
-                                    if let Ok(command) = rx.try_recv() {
-                                        match command {
-                                            InSourceControl::Todo => {}
-                                            InSourceControl::StopStream => return,
-                                        }
-                                    }
-                                    // let chunk = chunk.collect_vec();
-                                    let mut left = vec![];
-                                    let mut right = vec![];
-                                    let mut f = false;
-                                    for el in chunk {
-                                        if !f {
-                                            match current.bits_per_sample.cmp(&24) {
-                                                std::cmp::Ordering::Equal => left.push(el as f32),
-                                                std::cmp::Ordering::Greater => left.push(
-                                                    (el >> (current.bits_per_sample - 24)) as f32,
-                                                ),
-                                                std::cmp::Ordering::Less => left.push(
-                                                    (el << (24 - current.bits_per_sample)) as f32,
-                                                ),
-                                            }
-                                            f = true;
-                                        } else {
-                                            match current.bits_per_sample.cmp(&24) {
-                                                std::cmp::Ordering::Equal => right.push(el as f32),
-                                                std::cmp::Ordering::Greater => right.push(
-                                                    (el >> (current.bits_per_sample - 24)) as f32,
-                                                ),
-                                                std::cmp::Ordering::Less => right.push(
-                                                    (el << (24 - current.bits_per_sample)) as f32,
-                                                ),
-                                            };
-                                            f = false;
-                                        }
-                                    }
-                                    left.resize(current.sample_rate as usize, 0.0);
-                                    right.resize(current.sample_rate as usize, 0.0);
-                                    let chunk = vec![left, right];
-
-                                    let out = resampler.process(&chunk).unwrap();
-                                    let out = out[0].iter().interleave(out[1].iter()).collect_vec();
-                                    for sample in out {
-                                        ttx.send(*sample).unwrap();
+                    SourceControl::AddTrack(track_path) => {
+                        let (tx, rx) = sync_channel(3);
+                        self.in_source_control_tx = Some(tx);
+                        let ttx = self.sample_tx.clone();
+                        let stream_config = self.stream_config.lock().unwrap().clone();
+                        let mut current = Source::from_path(track_path);
+                        let timer = self.current_timer.clone();
+                        self.current_source = Some(thread::spawn(move || {
+                            let samples = current.reader.samples().map(|e| e.unwrap());
+                            // println!("started next track");
+                            //
+                            // rubato
+                            let params = InterpolationParameters {
+                                sinc_len: 2048,
+                                f_cutoff: 1.0,
+                                interpolation: rubato::InterpolationType::Cubic,
+                                oversampling_factor: 1024,
+                                window: rubato::WindowFunction::BlackmanHarris2,
+                            };
+                            let mut resampler = SincFixedIn::<f32>::new(
+                                stream_config.sample_rate.0 as f64 / current.sample_rate as f64,
+                                params,
+                                current.sample_rate as usize,
+                                current.nchannels,
+                            );
+                            for chunk in &samples.chunks(current.sample_rate as usize * 2) {
+                                if let Ok(command) = rx.try_recv() {
+                                    match command {
+                                        InSourceControl::StopStream => return,
                                     }
                                 }
-                            }))
-                        }
+                                let mut left = vec![];
+                                let mut right = vec![];
+                                let mut f = false;
+                                for el in chunk {
+                                    if !f {
+                                        match current.bits_per_sample.cmp(&24) {
+                                            std::cmp::Ordering::Equal => left.push(el as f32),
+                                            std::cmp::Ordering::Greater => left.push(
+                                                (el >> (current.bits_per_sample - 24)) as f32,
+                                            ),
+                                            std::cmp::Ordering::Less => left.push(
+                                                (el << (24 - current.bits_per_sample)) as f32,
+                                            ),
+                                        }
+                                        f = true;
+                                    } else {
+                                        match current.bits_per_sample.cmp(&24) {
+                                            std::cmp::Ordering::Equal => right.push(el as f32),
+                                            std::cmp::Ordering::Greater => right.push(
+                                                (el >> (current.bits_per_sample - 24)) as f32,
+                                            ),
+                                            std::cmp::Ordering::Less => right.push(
+                                                (el << (24 - current.bits_per_sample)) as f32,
+                                            ),
+                                        };
+                                        f = false;
+                                    }
+                                }
+                                left.resize(current.sample_rate as usize, 0.0);
+                                right.resize(current.sample_rate as usize, 0.0);
+                                let chunk = vec![left, right];
+
+                                let out = resampler.process(&chunk).unwrap();
+                                let out = out[0].iter().interleave(out[1].iter()).collect_vec();
+                                for sample in out {
+                                    ttx.send(*sample).unwrap();
+                                }
+                                timer
+                                    .clone()
+                                    .store(timer.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
+                            }
+                            timer.store(0, Ordering::Relaxed);
+                        }))
                     }
                     SourceControl::Stop => match &self.in_source_control_tx {
                         Some(sender) => {
@@ -192,9 +182,6 @@ impl SourceHandler {
                         }
                         None => {}
                     },
-                    SourceControl::AddTrack(track_path) => {
-                        self.queue.push(Source::from_path(track_path))
-                    }
                 }
             };
         })
@@ -232,14 +219,14 @@ impl Source {
 }
 
 pub enum Control {
+    Resume,
+    Pause,
     AddTrack(String),
     NextTrack,
     Todo,
 }
 
 enum SourceControl {
-    Todo,
-    NextTrack,
     AddTrack(String),
     Stop,
 }
@@ -248,8 +235,8 @@ struct Backend {
     control_rx: Receiver<Control>,
     stream_control_tx: SyncSender<StreamControl>,
     source_control_tx: SyncSender<SourceControl>,
-    stream: JoinHandle<()>,
-    source_processor: JoinHandle<()>,
+    _stream: JoinHandle<()>,
+    _source_processor: JoinHandle<()>,
 }
 
 impl Backend {
@@ -261,25 +248,38 @@ impl Backend {
                         .source_control_tx
                         .send(SourceControl::AddTrack(track_path))
                         .unwrap(),
-                    Control::NextTrack => self
-                        .source_control_tx
-                        .send(SourceControl::NextTrack)
-                        .unwrap(),
+
                     Control::Todo => todo!(),
+                    Control::Resume => self.stream_control_tx.send(StreamControl::Resume).unwrap(),
+                    Control::Pause => self.stream_control_tx.send(StreamControl::Pause).unwrap(),
+                    Control::NextTrack => todo!(),
                 }
             }
         })
     }
 }
 
-struct Ui {
-    control_tx: SyncSender<Control>,
+pub enum InputMode {
+    Normal,
+    AddTrack,
+}
+
+pub struct Ui {
+    // pub source_rx: Receiver<SourceResponse>,
+    pub timer: Arc<AtomicUsize>,
+    pub paused: Arc<AtomicBool>,
+    pub volume: Arc<AtomicU8>,
+    pub control_tx: SyncSender<Control>,
+    pub cursor: u16,
+    pub tmp_add_track: Vec<char>,
+    pub add_track: bool,
+    pub ui_state: InputMode,
 }
 
 pub struct Rpc {
     pub front_tx: SyncSender<Control>,
-    front: JoinHandle<()>,
-    back: JoinHandle<()>,
+    pub ui: Ui,
+    _back: JoinHandle<()>,
 }
 
 impl Rpc {
@@ -287,39 +287,56 @@ impl Rpc {
         let (control_tx, control_rx) = sync_channel(3);
         let (stream_control_tx, stream_control_rx) = sync_channel(3);
         let (source_control_tx, source_control_rx) = sync_channel(3);
-        let (stream, sample_tx, stream_config, volume) = Stream::start(stream_control_rx);
+        let (stream, sample_tx, stream_config, volume, paused) = Stream::start(stream_control_rx);
+        // let (source_response_tx, source_response_rx) = sync_channel(3);
+        let timer = Arc::new(AtomicUsize::new(0));
         let source_processor = SourceHandler {
             source_control_rx,
             sample_tx,
             in_source_control_tx: None,
             current_source: None,
-            queue: vec![],
             stream_config,
+            current_timer: timer.clone(),
         };
         let backend = Backend {
             control_rx,
             stream_control_tx,
             source_control_tx,
-            stream,
-            source_processor: source_processor.start(),
+            _stream: stream,
+            _source_processor: source_processor.start(),
         };
         let front = Ui {
             control_tx: control_tx.clone(),
+            cursor: 0,
+            tmp_add_track: vec![],
+            add_track: false,
+            ui_state: InputMode::Normal,
+            paused,
+            volume,
+            timer,
         };
-        // let rpc = Rpc {
-        //     front: todo!(),
-        //     back: todo!(),
-        // };
 
-        // for demo
-        let fronth = thread::spawn(|| {});
         let backh = backend.start();
 
         Rpc {
             front_tx: control_tx,
-            front: fronth,
-            back: backh,
+            ui: front,
+            _back: backh,
         }
+    }
+
+    pub fn set_volume(&mut self, volume: i8) {
+        if volume > 100 {
+            self.ui.volume.store(100, Ordering::Relaxed)
+        } else if volume < 0 {
+            self.ui.volume.store(0, Ordering::Relaxed)
+        } else {
+            self.ui.volume.store(volume as u8, Ordering::Relaxed)
+        }
+    }
+
+    pub fn volume(&self) -> u8 {
+        self.ui.volume.load(Ordering::Relaxed)
     }
 }
 
@@ -385,11 +402,11 @@ where
     F: FnMut(&Receiver<f32>) -> f32 + std::marker::Send + 'static + Copy,
 {
     // let (tx, rx) = sync_channel(config.sample_rate.0 as usize + 1);
-    let (tx, rx) = sync_channel((config.sample_rate.0 as usize) * 3);
+    let (tx, rx) = sync_channel((config.sample_rate.0 as usize) / 4);
 
     let err_fn = |err| eprintln!("Error building output sound stream: {}", err);
 
-    let volume = Arc::new(AtomicU8::new(100));
+    let volume = Arc::new(AtomicU8::new(50));
     let vvolume = volume.clone();
 
     let stream = device.build_output_stream(
