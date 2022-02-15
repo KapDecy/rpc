@@ -1,0 +1,22 @@
+[package]
+name = "rpc"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+cpal = "*"
+pausable_clock = "*"
+crossterm = "0.23"
+clap = "*"
+anyhow = "*"
+claxon = "*"
+ringbuf = "0.2.6"
+libsoxr = "0.2"
+itertools = "0.10.3"
+tui = "0.17.0"
+crossbeam = "*"
+
+[profile.dev]
+opt-level = 3
