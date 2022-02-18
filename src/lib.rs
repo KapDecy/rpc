@@ -1,6 +1,5 @@
 use std::{
     fs::File,
-    io::BufReader,
     sync::{
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         mpsc::{sync_channel, Receiver, SyncSender},
@@ -101,7 +100,7 @@ impl SourceHandler {
         thread::spawn(move || loop {
             if let Ok(control) = self.source_control_rx.recv() {
                 match control {
-                    SourceControl::AddTrack(track_path) => {
+                    SourceControl::AddTrack(track_path, skip) => {
                         let (tx, rx) = sync_channel(3);
                         self.in_source_control_tx = Some(tx);
                         let ttx = self.sample_tx.clone();
@@ -115,7 +114,7 @@ impl SourceHandler {
                             // rubato
                             let params = InterpolationParameters {
                                 sinc_len: 2048,
-                                f_cutoff: 1.0,
+                                f_cutoff: 0.95,
                                 interpolation: rubato::InterpolationType::Cubic,
                                 oversampling_factor: 1024,
                                 window: rubato::WindowFunction::BlackmanHarris2,
@@ -126,12 +125,9 @@ impl SourceHandler {
                                 current.sample_rate as usize,
                                 current.nchannels,
                             );
-                            for chunk in &samples.chunks(current.sample_rate as usize * 2) {
-                                if let Ok(command) = rx.try_recv() {
-                                    match command {
-                                        InSourceControl::StopStream => return,
-                                    }
-                                }
+                            for chunk in
+                                &samples.skip(skip).chunks(current.sample_rate as usize * 2)
+                            {
                                 let mut left = vec![];
                                 let mut right = vec![];
                                 let mut f = false;
@@ -167,6 +163,12 @@ impl SourceHandler {
                                 let out = resampler.process(&chunk).unwrap();
                                 let out = out[0].iter().interleave(out[1].iter()).collect_vec();
                                 for sample in out {
+                                    if let Ok(InSourceControl::StopStream) = rx.try_recv() {
+                                        {
+                                            timer.store(0, Ordering::Relaxed);
+                                            return;
+                                        }
+                                    }
                                     ttx.send(*sample).unwrap();
                                 }
                                 timer
@@ -187,10 +189,10 @@ impl SourceHandler {
         })
     }
 }
-struct Source {
+pub struct Source {
     activated: bool,
     finished: bool,
-    reader: FlacReader<BufReader<File>>,
+    reader: FlacReader<File>,
     sample_rate: f32,
     bits_per_sample: u8,
     nchannels: usize,
@@ -200,7 +202,7 @@ struct Source {
 impl Source {
     fn from_path(track_path: String) -> Source {
         let track_path = track_path.trim().trim_matches('"');
-        let reader = FlacReader::new(BufReader::new(File::open(track_path).unwrap())).unwrap();
+        let reader = FlacReader::open(track_path).unwrap();
         let bits_per_sample = reader.streaminfo().bits_per_sample as u8;
         let sample_rate = reader.streaminfo().sample_rate as f32;
         let nchannels = reader.streaminfo().channels as usize;
@@ -210,8 +212,8 @@ impl Source {
             activated: false,
             finished: false,
             reader,
-            bits_per_sample,
             sample_rate,
+            bits_per_sample,
             nchannels,
             samples_count,
         }
@@ -221,13 +223,14 @@ impl Source {
 pub enum Control {
     Resume,
     Pause,
-    AddTrack(String),
+    AddTrack(String, usize),
     NextTrack,
+    StopCurTrack,
     Todo,
 }
 
 enum SourceControl {
-    AddTrack(String),
+    AddTrack(String, usize),
     Stop,
 }
 
@@ -244,14 +247,17 @@ impl Backend {
         thread::spawn(move || loop {
             if let Ok(command) = self.control_rx.recv() {
                 match command {
-                    Control::AddTrack(track_path) => self
+                    Control::AddTrack(track_path, skip) => self
                         .source_control_tx
-                        .send(SourceControl::AddTrack(track_path))
+                        .send(SourceControl::AddTrack(track_path, skip))
                         .unwrap(),
 
                     Control::Todo => todo!(),
                     Control::Resume => self.stream_control_tx.send(StreamControl::Resume).unwrap(),
                     Control::Pause => self.stream_control_tx.send(StreamControl::Pause).unwrap(),
+                    Control::StopCurTrack => {
+                        self.source_control_tx.send(SourceControl::Stop).unwrap()
+                    }
                     Control::NextTrack => todo!(),
                 }
             }
@@ -266,6 +272,8 @@ pub enum InputMode {
 
 pub struct Ui {
     // pub source_rx: Receiver<SourceResponse>,
+    pub queue: Vec<String>,
+    pub current: Option<Source>,
     pub timer: Arc<AtomicUsize>,
     pub paused: Arc<AtomicBool>,
     pub volume: Arc<AtomicU8>,
@@ -306,14 +314,16 @@ impl Rpc {
             _source_processor: source_processor.start(),
         };
         let front = Ui {
+            queue: vec![],
+            current: None,
+            timer,
+            paused,
+            volume,
             control_tx: control_tx.clone(),
             cursor: 0,
             tmp_add_track: vec![],
             add_track: false,
             ui_state: InputMode::Normal,
-            paused,
-            volume,
-            timer,
         };
 
         let backh = backend.start();

@@ -66,6 +66,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                         }
                         KeyCode::Char('+') => rpc.set_volume(volume as i8 + 5),
                         KeyCode::Char('-') => rpc.set_volume(volume as i8 - 5),
+                        KeyCode::Char('s') => {
+                            rpc.ui.control_tx.send(Control::StopCurTrack).unwrap()
+                        }
                         KeyCode::Char('a') => match rpc.ui.add_track {
                             true => {
                                 rpc.ui.add_track = false;
@@ -90,7 +93,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                                         .store(true, std::sync::atomic::Ordering::SeqCst);
                                 }
                             }
-                        }
+                        },
+                        // KeyCode::Right
                         _ => {}
                     },
                     InputMode::AddTrack => match key.code {
@@ -98,7 +102,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                             let track_path = rpc.ui.tmp_add_track.drain(..).collect();
                             rpc.ui
                                 .control_tx
-                                .send(Control::AddTrack(track_path))
+                                .send(Control::AddTrack(track_path, 0))
                                 .unwrap();
                             rpc.ui.cursor = 0;
                         }
