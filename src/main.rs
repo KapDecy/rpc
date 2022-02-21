@@ -93,13 +93,37 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                                         .store(true, std::sync::atomic::Ordering::SeqCst);
                                 }
                             }
-                        },
-                        // KeyCode::Right
+                        }
+                        KeyCode::Right => {
+                            rpc.ui.control_tx.send(Control::Seek).unwrap();
+                            rpc.ui
+                                .control_tx
+                                .send(Control::AddTrack(
+                                    rpc.ui.current.as_ref().unwrap().clone(),
+                                    (rpc.ui.timer.load(std::sync::atomic::Ordering::Relaxed) / 4)
+                                        + 15,
+                                ))
+                                .unwrap();
+                        }
+                        KeyCode::Left => {
+                            rpc.ui.control_tx.send(Control::Seek).unwrap();
+                            rpc.ui
+                                .control_tx
+                                .send(Control::AddTrack(
+                                    rpc.ui.current.as_ref().unwrap().clone(),
+                                    ((rpc.ui.timer.load(std::sync::atomic::Ordering::Relaxed) / 4)
+                                        as isize
+                                        - 15)
+                                        .max(0) as usize,
+                                ))
+                                .unwrap();
+                        }
                         _ => {}
                     },
                     InputMode::AddTrack => match key.code {
                         KeyCode::Enter => {
-                            let track_path = rpc.ui.tmp_add_track.drain(..).collect();
+                            let track_path: String = rpc.ui.tmp_add_track.drain(..).collect();
+                            rpc.ui.current = Some(track_path.clone());
                             rpc.ui
                                 .control_tx
                                 .send(Control::AddTrack(track_path, 0))
@@ -156,8 +180,8 @@ fn ui<B: Backend>(f: &mut Frame<B>, rpc: &Rpc) {
     let msg = format!(
         "cur vol: {}, cur time: {}:{:02}",
         rpc.volume(),
-        rpc.ui.timer.load(std::sync::atomic::Ordering::Relaxed) / 60,
-        rpc.ui.timer.load(std::sync::atomic::Ordering::Relaxed) % 60,
+        (rpc.ui.timer.load(std::sync::atomic::Ordering::Relaxed) / 4) / 60,
+        (rpc.ui.timer.load(std::sync::atomic::Ordering::Relaxed) / 4) % 60,
     );
     let mut text = Text::from(Spans::from(msg));
     text.patch_style(Style::default());
@@ -173,7 +197,10 @@ fn ui<B: Backend>(f: &mut Frame<B>, rpc: &Rpc) {
                 InputMode::AddTrack => Style::default().fg(Color::Yellow),
             })
             .alignment(tui::layout::Alignment::Left)
-            .wrap(Wrap { trim: false });
+            .wrap(Wrap {
+                trim: false,
+                break_word: true,
+            });
         f.render_widget(tui::widgets::Clear, area); //this clears out the background
         f.render_widget(text, area);
         f.set_cursor(

@@ -5,6 +5,7 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+
 [dependencies]
 cpal = "*"
 pausable_clock = "*"
@@ -13,11 +14,16 @@ clap = "*"
 anyhow = "*"
 claxon = "*"
 ringbuf = "0.2.6"
-libsoxr = "0.2"
 itertools = "0.10.3"
-tui = "0.17.0"
+tui = {path = "D:/documents/projects/libs/rust/tui-rs"}
+# using custom tui-rs version with changes from this fork https://github.com/Phoenix-Chen/tui-rs
 crossbeam = "*"
 rubato = "*"
+symphonia = {version="*", features=["aac", "alac", "mp3", "isomp4"]}
+tui-input = "*"
+rb = "0.4.0"
 
 [profile.dev]
 opt-level = 3
+
+

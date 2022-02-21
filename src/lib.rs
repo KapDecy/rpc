@@ -1,5 +1,6 @@
+#![feature(thread_is_running)]
 use std::{
-    fs::File,
+    iter::zip,
     sync::{
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         mpsc::{sync_channel, Receiver, SyncSender},
@@ -8,13 +9,21 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use claxon::FlacReader;
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     StreamConfig,
 };
 use itertools::Itertools;
 use rubato::{InterpolationParameters, Resampler, SincFixedIn};
+
+use rb::*;
+use symphonia::core::audio::Signal;
+use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::errors::Error;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
 
 enum InStreamControl {
     Pause,
@@ -46,7 +55,7 @@ impl Stream {
         let (temp_tx, temp_rx) = sync_channel(2);
         let h = thread::spawn(move || {
             let (stream, tx, config, volume) = stream_setup_for(|o| match o.try_recv() {
-                Ok(v) => v / 10000000.0,
+                Ok(v) => v / 2000000000.0,
                 Err(_) => 0.0,
             })
             .unwrap();
@@ -82,6 +91,7 @@ impl Stream {
 
 enum InSourceControl {
     StopStream,
+    Seek,
 }
 
 pub enum SourceResponse {}
@@ -105,12 +115,178 @@ impl SourceHandler {
                         self.in_source_control_tx = Some(tx);
                         let ttx = self.sample_tx.clone();
                         let stream_config = self.stream_config.lock().unwrap().clone();
-                        let mut current = Source::from_path(track_path);
+                        // let mut current = Source::from_path(track_path);
+                        let src = std::fs::File::open(track_path.trim().trim_matches('"')).unwrap();
+                        let mss = MediaSourceStream::new(Box::new(src), Default::default());
+                        let hint = Hint::new();
+                        let meta_opts: MetadataOptions = Default::default();
+                        let fmt_opts: FormatOptions = Default::default();
+                        let probed = symphonia::default::get_probe()
+                            .format(&hint, mss, &fmt_opts, &meta_opts)
+                            .expect("unsupported format");
+                        let mut format = probed.format;
+
+                        let track = format
+                            .tracks()
+                            .iter()
+                            .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+                            .expect("no supported audio tracks");
+                        let dec_opts: DecoderOptions = Default::default();
+                        let mut decoder = symphonia::default::get_codecs()
+                            .make(&track.codec_params, &dec_opts)
+                            .expect("unsupported codec");
+                        let track_id = track.id;
+                        // let bps = track.clone().codec_params.bits_per_sample.unwrap();
+                        let sample_rate = track.clone().codec_params.sample_rate.unwrap();
+                        let chans = track.clone().codec_params.channels.unwrap().count();
                         let timer = self.current_timer.clone();
+                        if format
+                            .seek(
+                                symphonia::core::formats::SeekMode::Accurate,
+                                symphonia::core::formats::SeekTo::Time {
+                                    time: symphonia::core::units::Time {
+                                        seconds: skip as u64,
+                                        frac: 0.0,
+                                    },
+                                    track_id: None,
+                                },
+                            )
+                            .is_ok()
+                        {
+                            timer.store(skip * 4, Ordering::Relaxed);
+                        } else {
+                            timer.store(0, Ordering::Relaxed);
+                            continue;
+                        }
+
                         self.current_source = Some(thread::spawn(move || {
-                            let samples = current.reader.samples().map(|e| e.unwrap());
-                            // println!("started next track");
-                            //
+                            let (lprod, lcon) = sync_channel(sample_rate as usize);
+                            let (rprod, rcon) = sync_channel(sample_rate as usize);
+                            let packetsthread = thread::spawn(move || {
+                                while let Ok(packet) = format.next_packet() {
+                                    while !format.metadata().is_latest() {
+                                        // Pop the old head of the metadata queue.
+                                        format.metadata().pop();
+
+                                        // Consume the new metadata at the head of the metadata queue.
+                                    }
+                                    if packet.track_id() != track_id {
+                                        continue;
+                                    }
+                                    match decoder.decode(&packet) {
+                                        Ok(decoded) => match decoded {
+                                            symphonia::core::audio::AudioBufferRef::S32(buf) => {
+                                                let left = buf.chan(0).to_vec();
+                                                let right = buf.chan(1).to_vec();
+                                                // TODO разберись с bits_per_sample
+                                                // let left = left
+                                                //     .iter()
+                                                //     .map(|e| match bps.cmp(&24) {
+                                                //         std::cmp::Ordering::Equal => *e as f32,
+                                                //         std::cmp::Ordering::Greater => {
+                                                //             (*e >> (bps - 24)) as f32
+                                                //         }
+                                                //         std::cmp::Ordering::Less => {
+                                                //             (*e << (24 - bps)) as f32
+                                                //         }
+                                                //     })
+                                                //     .collect_vec();
+                                                for e in zip(left, right) {
+                                                    match lprod.send(e.0 as f32) {
+                                                        Ok(_) => {}
+                                                        Err(_) => break,
+                                                    };
+                                                    rprod.send(e.1 as f32).unwrap();
+                                                }
+                                            }
+                                            symphonia::core::audio::AudioBufferRef::U8(buf) => {
+                                                todo!()
+                                            }
+                                            symphonia::core::audio::AudioBufferRef::U16(buf) => {
+                                                todo!()
+                                            }
+                                            symphonia::core::audio::AudioBufferRef::U24(buf) => {
+                                                todo!()
+                                            }
+                                            symphonia::core::audio::AudioBufferRef::U32(buf) => {
+                                                todo!()
+                                            } // TODO Сделать все варианты инпутов
+                                            symphonia::core::audio::AudioBufferRef::S8(buf) => {
+                                                let left = buf.chan(0).to_vec();
+                                                let right = buf.chan(1).to_vec();
+                                                for e in zip(left, right) {
+                                                    match lprod.send(((e.0 as i32) << 24) as f32) {
+                                                        Ok(_) => {}
+                                                        Err(_) => break,
+                                                    };
+                                                    rprod
+                                                        .send(((e.1 as i32) << 24) as f32)
+                                                        .unwrap();
+                                                }
+                                            }
+                                            symphonia::core::audio::AudioBufferRef::S16(buf) => {
+                                                let left = buf.chan(0).to_vec();
+                                                let right = buf.chan(1).to_vec();
+                                                for e in zip(left, right) {
+                                                    match lprod.send((e.0 as i32) as f32) {
+                                                        Ok(_) => {}
+                                                        Err(_) => break,
+                                                    };
+                                                    rprod.send((e.1 as i32) as f32).unwrap();
+                                                }
+                                            }
+                                            symphonia::core::audio::AudioBufferRef::S24(buf) => {
+                                                let left = buf.chan(0).to_vec();
+                                                let right = buf.chan(1).to_vec();
+                                                for e in zip(left, right) {
+                                                    match lprod.send((e.0.into_i32()) as f32) {
+                                                        Ok(_) => {}
+                                                        Err(_) => break,
+                                                    };
+                                                    rprod.send((e.1.into_i32()) as f32).unwrap();
+                                                }
+                                            }
+                                            symphonia::core::audio::AudioBufferRef::F32(buf) => {
+                                                let left = buf.chan(0).to_vec();
+                                                let right = buf.chan(1).to_vec();
+                                                for e in zip(left, right) {
+                                                    match lprod.send(e.0 * 2000000000.0) {
+                                                        Ok(_) => {}
+                                                        Err(_) => break,
+                                                    };
+                                                    rprod.send(e.1 * 2000000000.0).unwrap();
+                                                }
+                                            }
+                                            symphonia::core::audio::AudioBufferRef::F64(buf) => {
+                                                let left = buf.chan(0).to_vec();
+                                                let right = buf.chan(1).to_vec();
+                                                for e in zip(left, right) {
+                                                    match lprod.send((e.0 * 2000000000.0) as f32) {
+                                                        Ok(_) => {}
+                                                        Err(_) => break,
+                                                    };
+                                                    rprod
+                                                        .send((e.1 * 2000000000.0) as f32)
+                                                        .unwrap();
+                                                }
+                                            }
+                                        },
+                                        Err(Error::IoError(_)) => {
+                                            // The packet failed to decode due to an IO error, skip the packet.
+                                            continue;
+                                        }
+                                        Err(Error::DecodeError(_)) => {
+                                            // The packet failed to decode due to invalid data, skip the packet.
+                                            continue;
+                                        }
+                                        Err(err) => {
+                                            // An unrecoverable error occured, halt decoding.
+                                            panic!("{}", err);
+                                        }
+                                    }
+                                }
+                            });
+
                             // rubato
                             let params = InterpolationParameters {
                                 sinc_len: 2048,
@@ -120,62 +296,45 @@ impl SourceHandler {
                                 window: rubato::WindowFunction::BlackmanHarris2,
                             };
                             let mut resampler = SincFixedIn::<f32>::new(
-                                stream_config.sample_rate.0 as f64 / current.sample_rate as f64,
+                                stream_config.sample_rate.0 as f64 / sample_rate as f64,
                                 params,
-                                current.sample_rate as usize,
-                                current.nchannels,
+                                sample_rate as usize / 4,
+                                chans,
                             );
-                            for chunk in
-                                &samples.skip(skip).chunks(current.sample_rate as usize * 2)
-                            {
-                                let mut left = vec![];
-                                let mut right = vec![];
-                                let mut f = false;
-                                for el in chunk {
-                                    if !f {
-                                        match current.bits_per_sample.cmp(&24) {
-                                            std::cmp::Ordering::Equal => left.push(el as f32),
-                                            std::cmp::Ordering::Greater => left.push(
-                                                (el >> (current.bits_per_sample - 24)) as f32,
-                                            ),
-                                            std::cmp::Ordering::Less => left.push(
-                                                (el << (24 - current.bits_per_sample)) as f32,
-                                            ),
+                            let mut seek = false;
+                            while packetsthread.is_running() {
+                                if let Ok(command) = rx.try_recv() {
+                                    match command {
+                                        InSourceControl::StopStream => {
+                                            timer.store(0, Ordering::Relaxed);
+                                            break;
                                         }
-                                        f = true;
-                                    } else {
-                                        match current.bits_per_sample.cmp(&24) {
-                                            std::cmp::Ordering::Equal => right.push(el as f32),
-                                            std::cmp::Ordering::Greater => right.push(
-                                                (el >> (current.bits_per_sample - 24)) as f32,
-                                            ),
-                                            std::cmp::Ordering::Less => right.push(
-                                                (el << (24 - current.bits_per_sample)) as f32,
-                                            ),
-                                        };
-                                        f = false;
+                                        InSourceControl::Seek => {
+                                            // TODO часы сбрасываются при перемотке
+                                            seek = true;
+                                            break;
+                                        }
                                     }
                                 }
-                                left.resize(current.sample_rate as usize, 0.0);
-                                right.resize(current.sample_rate as usize, 0.0);
-                                let chunk = vec![left, right];
+                                let mut left = vec![];
+                                let mut right = vec![];
 
+                                for _ in 0..(sample_rate / 4) {
+                                    left.push(lcon.recv().unwrap());
+                                    right.push(rcon.recv().unwrap());
+                                }
+
+                                let chunk = vec![left, right];
                                 let out = resampler.process(&chunk).unwrap();
                                 let out = out[0].iter().interleave(out[1].iter()).collect_vec();
                                 for sample in out {
-                                    if let Ok(InSourceControl::StopStream) = rx.try_recv() {
-                                        {
-                                            timer.store(0, Ordering::Relaxed);
-                                            return;
-                                        }
-                                    }
                                     ttx.send(*sample).unwrap();
                                 }
-                                timer
-                                    .clone()
-                                    .store(timer.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
+                                timer.store(timer.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
                             }
-                            timer.store(0, Ordering::Relaxed);
+                            if !seek {
+                                timer.store(0, Ordering::Relaxed);
+                            }
                         }))
                     }
                     SourceControl::Stop => match &self.in_source_control_tx {
@@ -184,41 +343,19 @@ impl SourceHandler {
                         }
                         None => {}
                     },
+                    SourceControl::Seek => match &self.in_source_control_tx {
+                        Some(sender) => {
+                            sender.send(InSourceControl::Seek).unwrap_or(());
+                        }
+                        None => {}
+                    },
                 }
             };
         })
     }
 }
-pub struct Source {
-    activated: bool,
-    finished: bool,
-    reader: FlacReader<File>,
-    sample_rate: f32,
-    bits_per_sample: u8,
-    nchannels: usize,
-    samples_count: usize,
-}
-
-impl Source {
-    fn from_path(track_path: String) -> Source {
-        let track_path = track_path.trim().trim_matches('"');
-        let reader = FlacReader::open(track_path).unwrap();
-        let bits_per_sample = reader.streaminfo().bits_per_sample as u8;
-        let sample_rate = reader.streaminfo().sample_rate as f32;
-        let nchannels = reader.streaminfo().channels as usize;
-        let samples_count = reader.streaminfo().samples.unwrap() as usize;
-
-        Source {
-            activated: false,
-            finished: false,
-            reader,
-            sample_rate,
-            bits_per_sample,
-            nchannels,
-            samples_count,
-        }
-    }
-}
+// TODO normal Source struct
+pub struct Source {}
 
 pub enum Control {
     Resume,
@@ -226,12 +363,14 @@ pub enum Control {
     AddTrack(String, usize),
     NextTrack,
     StopCurTrack,
+    Seek,
     Todo,
 }
 
 enum SourceControl {
     AddTrack(String, usize),
     Stop,
+    Seek,
 }
 
 struct Backend {
@@ -259,6 +398,7 @@ impl Backend {
                         self.source_control_tx.send(SourceControl::Stop).unwrap()
                     }
                     Control::NextTrack => todo!(),
+                    Control::Seek => self.source_control_tx.send(SourceControl::Seek).unwrap(),
                 }
             }
         })
@@ -273,7 +413,7 @@ pub enum InputMode {
 pub struct Ui {
     // pub source_rx: Receiver<SourceResponse>,
     pub queue: Vec<String>,
-    pub current: Option<Source>,
+    pub current: Option<String>,
     pub timer: Arc<AtomicUsize>,
     pub paused: Arc<AtomicBool>,
     pub volume: Arc<AtomicU8>,
@@ -358,15 +498,12 @@ impl Default for Rpc {
 
 fn stream_setup_for<F>(
     on_sample: F,
-) -> Result<
-    (
-        cpal::Stream,
-        SyncSender<f32>,
-        cpal::StreamConfig,
-        Arc<AtomicU8>,
-    ),
-    anyhow::Error,
->
+) -> Result<(
+    cpal::Stream,
+    SyncSender<f32>,
+    cpal::StreamConfig,
+    Arc<AtomicU8>,
+)>
 where
     F: FnMut(&Receiver<f32>) -> f32 + std::marker::Send + 'static + Copy,
 {
@@ -379,16 +516,16 @@ where
     }
 }
 
-fn host_device_setup(
-) -> Result<(cpal::Host, cpal::Device, cpal::SupportedStreamConfig), anyhow::Error> {
+fn host_device_setup() -> Result<(cpal::Host, cpal::Device, cpal::SupportedStreamConfig)> {
     let host = cpal::default_host();
 
     let device = host
         .default_output_device()
-        .ok_or_else(|| anyhow::Error::msg("Default output device is not available"))?;
+        .ok_or_else(|| anyhow::Error::msg("Default output device is not available"))
+        .unwrap();
     // println!("Output device : {}", device.name()?);
 
-    let config = device.default_output_config()?;
+    let config = device.default_output_config().unwrap();
     // println!("Default output config : {:?}", config);
 
     Ok((host, device, config))
@@ -398,15 +535,12 @@ fn stream_make<T, F>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     on_sample: F,
-) -> Result<
-    (
-        cpal::Stream,
-        SyncSender<f32>,
-        cpal::StreamConfig,
-        Arc<AtomicU8>,
-    ),
-    anyhow::Error,
->
+) -> Result<(
+    cpal::Stream,
+    SyncSender<f32>,
+    cpal::StreamConfig,
+    Arc<AtomicU8>,
+)>
 where
     T: cpal::Sample,
     F: FnMut(&Receiver<f32>) -> f32 + std::marker::Send + 'static + Copy,
@@ -416,16 +550,18 @@ where
 
     let err_fn = |err| eprintln!("Error building output sound stream: {}", err);
 
-    let volume = Arc::new(AtomicU8::new(50));
+    let volume = Arc::new(AtomicU8::new(20));
     let vvolume = volume.clone();
 
-    let stream = device.build_output_stream(
-        config,
-        move |output: &mut [T], _: &cpal::OutputCallbackInfo| {
-            on_window(output, &rx, on_sample, vvolume.clone())
-        },
-        err_fn,
-    )?;
+    let stream = device
+        .build_output_stream(
+            config,
+            move |output: &mut [T], _: &cpal::OutputCallbackInfo| {
+                on_window(output, &rx, on_sample, vvolume.clone())
+            },
+            err_fn,
+        )
+        .unwrap();
 
     Ok((stream, tx, config.clone(), volume))
 }
