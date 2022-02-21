@@ -989,7 +989,6 @@ dependencies = [
  "rubato",
  "symphonia",
  "tui",
- "tui-input",
 ]
 
 [[package]]
@@ -1444,15 +1443,6 @@ dependencies = [
  "crossterm 0.22.1",
  "unicode-segmentation",
  "unicode-width",
-]
-
-[[package]]
-name = "tui-input"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "425271346f51f4a17222eb51b80a3184d7927fcdc1dee0d3e8b7933cbd756ca9"
-dependencies = [
- "crossterm 0.22.1",
 ]
 
 [[package]]

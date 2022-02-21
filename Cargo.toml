@@ -20,7 +20,6 @@ tui = {path = "D:/documents/projects/libs/rust/tui-rs"}
 crossbeam = "*"
 rubato = "*"
 symphonia = {version="*", features=["aac", "alac", "mp3", "isomp4"]}
-tui-input = "*"
 rb = "0.4.0"
 
 [profile.dev]
