@@ -15,7 +15,7 @@ anyhow = "*"
 claxon = "*"
 ringbuf = "0.2.6"
 itertools = "0.10.3"
-tui = {path = "C:\\Users\\Izya\\Documents\\GitHub\\rpc\\src\\tui-rs"}
+tui = {path = "src/tui-rs"}
 # using custom tui-rs version with changes from this fork https://github.com/Phoenix-Chen/tui-rs
 crossbeam = "*"
 rubato = "*"
