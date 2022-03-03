@@ -1,0 +1,88 @@
+[package]
+name = "tui"
+version = "0.17.0"
+authors = ["Florian Dehau <work@fdehau.com>"]
+description = """
+A library to build rich terminal user interfaces or dashboards
+"""
+documentation = "https://docs.rs/tui/0.17.0/tui/"
+keywords = ["tui", "terminal", "dashboard"]
+readme = "README.md"
+license = "MIT"
+exclude = ["assets/*", ".github", "Makefile.toml", "CONTRIBUTING.md", "*.log", "tags"]
+autoexamples = true
+edition = "2021"
+
+[badges]
+
+[features]
+default = ["crossterm"]
+
+[dependencies]
+bitflags = "1.3"
+cassowary = "0.3"
+unicode-segmentation = "1.2"
+unicode-width = "0.1"
+termion = { version = "1.5", optional = true }
+crossterm = { version = "0.22", optional = true }
+serde = { version = "1", optional = true, features = ["derive"]}
+
+[dev-dependencies]
+rand = "0.8"
+argh = "0.1"
+
+[[example]]
+name = "barchart"
+required-features = ["crossterm"]
+
+[[example]]
+name = "block"
+required-features = ["crossterm"]
+
+[[example]]
+name = "canvas"
+required-features = ["crossterm"]
+
+[[example]]
+name = "chart"
+required-features = ["crossterm"]
+
+[[example]]
+name = "custom_widget"
+required-features = ["crossterm"]
+
+[[example]]
+name = "gauge"
+required-features = ["crossterm"]
+
+[[example]]
+name = "layout"
+required-features = ["crossterm"]
+
+[[example]]
+name = "list"
+required-features = ["crossterm"]
+
+[[example]]
+name = "paragraph"
+required-features = ["crossterm"]
+
+[[example]]
+name = "popup"
+required-features = ["crossterm"]
+
+[[example]]
+name = "sparkline"
+required-features = ["crossterm"]
+
+[[example]]
+name = "table"
+required-features = ["crossterm"]
+
+[[example]]
+name = "tabs"
+required-features = ["crossterm"]
+
+[[example]]
+name = "user_input"
+required-features = ["crossterm"]
