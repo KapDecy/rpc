@@ -12,13 +12,13 @@ use cpal::StreamConfig;
 use itertools::Itertools;
 use rubato::{InterpolationParameters, Resampler, SincFixedIn};
 
-use symphonia::core::audio::Signal;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
+use symphonia::core::{audio::Signal};
 
 pub enum SourceResponse {
     Complete,
@@ -82,7 +82,7 @@ impl SourceHandler {
                         let timer = self.current_timer.clone();
                         if format
                             .seek(
-                                symphonia::core::formats::SeekMode::Accurate,
+                                symphonia::core::formats::SeekMode::Coarse,
                                 symphonia::core::formats::SeekTo::Time {
                                     time: symphonia::core::units::Time {
                                         seconds: skip as u64,
@@ -98,27 +98,32 @@ impl SourceHandler {
                             timer.store(0, Ordering::Relaxed);
                             continue;
                         }
-                        self.current_source = Some(thread::spawn(move || {
-                            let packet_control = Arc::new(AtomicBool::new(false));
-                            let pacc = packet_control.clone();
-                            let (lprod, lcon) = sync_channel(sample_rate as usize);
-                            let (rprod, rcon) = sync_channel(sample_rate as usize);
-                            let packetsthread = thread::spawn(move || {
-                                while let Ok(packet) = format.next_packet() {
-                                    if pacc.load(Ordering::Relaxed) {
-                                        break;
-                                    }
-                                    while !format.metadata().is_latest() {
-                                        // Pop the old head of the metadata queue.
-                                        format.metadata().pop();
+                        self.current_source =
+                            Some(thread::spawn(move || {
+                                let (ch_s_tx, ch_s_rx) = sync_channel(0);
+                                let packet_control = Arc::new(AtomicBool::new(false));
+                                let pacc = packet_control.clone();
+                                let (lprod, lcon) = sync_channel(sample_rate as usize);
+                                let (rprod, rcon) = sync_channel(sample_rate as usize);
+                                let packetsthread =
+                                    thread::spawn(move || {
+                                        while let Ok(packet) = format.next_packet() {
+                                            if pacc.load(Ordering::Relaxed) {
+                                                break;
+                                            }
+                                            while !format.metadata().is_latest() {
+                                                // Pop the old head of the metadata queue.
+                                                format.metadata().pop();
 
-                                        // Consume the new metadata at the head of the metadata queue.
-                                    }
-                                    if packet.track_id() != track_id {
-                                        continue;
-                                    }
-                                    match decoder.decode(&packet) {
-                                        Ok(decoded) => match decoded {
+                                                // Consume the new metadata at the head of the metadata queue.
+                                            }
+                                            if packet.track_id() != track_id {
+                                                continue;
+                                            }
+                                            match decoder.decode(&packet) {
+                                                Ok(decoded) => {
+                                                    ch_s_tx.try_send(decoded.capacity());
+                                                    match decoded {
                                             symphonia::core::audio::AudioBufferRef::S32(buf) => {
                                                 let left = buf.chan(0).to_vec();
                                                 let right = buf.chan(1).to_vec();
@@ -201,76 +206,84 @@ impl SourceHandler {
                                                         .unwrap();
                                                 }
                                             }
-                                        },
-                                        Err(Error::IoError(_)) => {
-                                            // The packet failed to decode due to an IO error, skip the packet.
-                                            continue;
                                         }
-                                        Err(Error::DecodeError(_)) => {
-                                            // The packet failed to decode due to invalid data, skip the packet.
-                                            continue;
+                                                }
+                                                Err(Error::IoError(_)) => {
+                                                    // The packet failed to decode due to an IO error, skip the packet.
+                                                    continue;
+                                                }
+                                                Err(Error::DecodeError(_)) => {
+                                                    // The packet failed to decode due to invalid data, skip the packet.
+                                                    continue;
+                                                }
+                                                Err(err) => {
+                                                    // An unrecoverable error occured, halt decoding.
+                                                    panic!("{}", err);
+                                                }
+                                            }
                                         }
-                                        Err(err) => {
-                                            // An unrecoverable error occured, halt decoding.
-                                            panic!("{}", err);
+                                    });
+                                let CHUNK_SIZE = ch_s_rx.recv().unwrap();
+                                drop(ch_s_rx);
+                                let timer_step = 1.0 / CHUNK_SIZE as f64;
+                                // rubato
+                                let params = InterpolationParameters {
+                                    sinc_len: 2048,
+                                    f_cutoff: 0.95,
+                                    interpolation: rubato::InterpolationType::Cubic,
+                                    oversampling_factor: 1024,
+                                    window: rubato::WindowFunction::BlackmanHarris2,
+                                };
+                                let mut resampler = SincFixedIn::<f32>::new(
+                                    stream_config.sample_rate.0 as f64 / sample_rate as f64,
+                                    params,
+                                    CHUNK_SIZE as usize,
+                                    chans,
+                                );
+                                let mut seek = false;
+                                while packetsthread.is_running() {
+                                    if let Ok(command) = rx.try_recv() {
+                                        match command {
+                                            InSourceControl::StopStream => {
+                                                timer.store(0, Ordering::Relaxed);
+                                                packet_control.store(true, Ordering::Relaxed);
+                                                break;
+                                            }
+                                            InSourceControl::Seek => {
+                                                // TODO множественная перемотка нагружает процессор
+                                                // уже не так сильно, можно подзабить
+                                                // TODO при перемотке что-то непонятное с памятью
+                                                packet_control.store(true, Ordering::Relaxed);
+                                                seek = true;
+                                                break;
+                                            }
                                         }
                                     }
-                                }
-                            });
+                                    let mut left = vec![];
+                                    let mut right = vec![];
 
-                            // rubato
-                            let params = InterpolationParameters {
-                                sinc_len: 2048,
-                                f_cutoff: 0.95,
-                                interpolation: rubato::InterpolationType::Cubic,
-                                oversampling_factor: 1024,
-                                window: rubato::WindowFunction::BlackmanHarris2,
-                            };
-                            let mut resampler = SincFixedIn::<f32>::new(
-                                stream_config.sample_rate.0 as f64 / sample_rate as f64,
-                                params,
-                                sample_rate as usize / 4,
-                                chans,
-                            );
-                            let mut seek = false;
-                            while packetsthread.is_running() {
-                                if let Ok(command) = rx.try_recv() {
-                                    match command {
-                                        InSourceControl::StopStream => {
-                                            timer.store(0, Ordering::Relaxed);
-                                            packet_control.store(true, Ordering::Relaxed);
-                                            break;
-                                        }
-                                        InSourceControl::Seek => {
-                                            // TODO множественная перемотка нагружает процессор
-                                            // уже не так сильно, можно подзабить
-                                            // TODO при перемотке что-то непонятное с памятью
-                                            packet_control.store(true, Ordering::Relaxed);
-                                            seek = true;
-                                            break;
-                                        }
+                                    for _ in 0..(CHUNK_SIZE) {
+                                        left.push(lcon.recv().unwrap());
+                                        right.push(rcon.recv().unwrap());
                                     }
-                                }
-                                let mut left = vec![];
-                                let mut right = vec![];
 
-                                for _ in 0..(sample_rate / 4) {
-                                    left.push(lcon.recv().unwrap());
-                                    right.push(rcon.recv().unwrap());
+                                    let chunk = vec![left, right];
+                                    let out = resampler.process(&chunk).unwrap();
+                                    let out = out[0].iter().interleave(out[1].iter()).collect_vec();
+                                    for sample in out {
+                                        ttx.send(*sample).unwrap();
+                                    }
+                                    timer.store(
+                                        // TODO Привязать timer к CHUNK_SIZE
+                                        // или заменить на pausable_timer
+                                        timer.load(Ordering::Relaxed) + 1,
+                                        Ordering::Relaxed,
+                                    );
                                 }
-
-                                let chunk = vec![left, right];
-                                let out = resampler.process(&chunk).unwrap();
-                                let out = out[0].iter().interleave(out[1].iter()).collect_vec();
-                                for sample in out {
-                                    ttx.send(*sample).unwrap();
+                                if !seek {
+                                    timer.store(0, Ordering::Relaxed);
                                 }
-                                timer.store(timer.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
-                            }
-                            if !seek {
-                                timer.store(0, Ordering::Relaxed);
-                            }
-                        }))
+                            }))
                     }
                     SourceControl::Stop => match &self.in_source_control_tx {
                         Some(sender) => {
