@@ -1,7 +1,7 @@
 use std::{
     iter::zip,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{sync_channel, Receiver, SyncSender},
         Arc, Mutex,
     },
@@ -99,10 +99,15 @@ impl SourceHandler {
                             continue;
                         }
                         self.current_source = Some(thread::spawn(move || {
+                            let packet_control = Arc::new(AtomicBool::new(false));
+                            let pacc = packet_control.clone();
                             let (lprod, lcon) = sync_channel(sample_rate as usize);
                             let (rprod, rcon) = sync_channel(sample_rate as usize);
                             let packetsthread = thread::spawn(move || {
                                 while let Ok(packet) = format.next_packet() {
+                                    if pacc.load(Ordering::Relaxed) {
+                                        break;
+                                    }
                                     while !format.metadata().is_latest() {
                                         // Pop the old head of the metadata queue.
                                         format.metadata().pop();
@@ -233,10 +238,14 @@ impl SourceHandler {
                                     match command {
                                         InSourceControl::StopStream => {
                                             timer.store(0, Ordering::Relaxed);
+                                            packet_control.store(true, Ordering::Relaxed);
                                             break;
                                         }
                                         InSourceControl::Seek => {
                                             // TODO множественная перемотка нагружает процессор
+                                            // уже не так сильно, можно подзабить
+                                            // TODO при перемотке что-то непонятное с памятью
+                                            packet_control.store(true, Ordering::Relaxed);
                                             seek = true;
                                             break;
                                         }

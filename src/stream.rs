@@ -155,12 +155,10 @@ fn on_window<T, F>(
     T: cpal::Sample,
     F: FnMut(&Receiver<f32>) -> f32 + std::marker::Send + 'static,
 {
-    for frame in output.chunks_mut(1) {
+    for frame in output.iter_mut() {
         let value: T = cpal::Sample::from::<f32>(
             &(on_sample(request) * ((volume.load(Ordering::Relaxed) as f32) / 100.0)),
         );
-        for sample in frame.iter_mut() {
-            *sample = value;
-        }
+        *frame = value;
     }
 }
