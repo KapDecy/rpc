@@ -6,26 +6,27 @@ use std::{
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use cpal::StreamConfig;
 use itertools::Itertools;
+use pausable_clock::*;
 use rubato::{InterpolationParameters, Resampler, SincFixedIn};
-
+use symphonia::core::audio::Signal;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use symphonia::core::{audio::Signal};
 
 pub enum SourceResponse {
     Complete,
 }
 
 pub(crate) enum SourceControl {
-    AddTrack(String, usize),
+    AddTrack(String, Duration),
     Stop,
     Seek,
 }
@@ -41,7 +42,7 @@ pub(crate) struct SourceHandler {
     pub(crate) sample_tx: SyncSender<f32>,
     pub(crate) in_source_control_tx: Option<SyncSender<InSourceControl>>,
     pub(crate) current_source: Option<JoinHandle<()>>,
-    pub(crate) current_timer: Arc<AtomicUsize>,
+    pub(crate) current_timer: Arc<Mutex<PausableClock>>,
 }
 
 impl SourceHandler {
@@ -80,12 +81,13 @@ impl SourceHandler {
                         let sample_rate = track.clone().codec_params.sample_rate.unwrap();
                         let chans = track.clone().codec_params.channels.unwrap().count();
                         let timer = self.current_timer.clone();
+                        let is_paused = timer.lock().unwrap().is_paused();
                         if format
                             .seek(
                                 symphonia::core::formats::SeekMode::Coarse,
                                 symphonia::core::formats::SeekTo::Time {
                                     time: symphonia::core::units::Time {
-                                        seconds: skip as u64,
+                                        seconds: skip.as_secs(),
                                         frac: 0.0,
                                     },
                                     track_id: None,
@@ -93,9 +95,11 @@ impl SourceHandler {
                             )
                             .is_ok()
                         {
-                            timer.store(skip * 4, Ordering::Relaxed);
+                            // TODO фикс ситуацию с паузой у таймера
+                            *timer.lock().unwrap() = PausableClock::new(skip, is_paused);
                         } else {
-                            timer.store(0, Ordering::Relaxed);
+                            *timer.lock().unwrap() =
+                                PausableClock::new(Duration::from_millis(0), is_paused);
                             continue;
                         }
                         self.current_source =
@@ -223,9 +227,8 @@ impl SourceHandler {
                                             }
                                         }
                                     });
-                                let CHUNK_SIZE = ch_s_rx.recv().unwrap();
+                                let chunk_size = ch_s_rx.recv().unwrap();
                                 drop(ch_s_rx);
-                                let timer_step = 1.0 / CHUNK_SIZE as f64;
                                 // rubato
                                 let params = InterpolationParameters {
                                     sinc_len: 2048,
@@ -237,7 +240,7 @@ impl SourceHandler {
                                 let mut resampler = SincFixedIn::<f32>::new(
                                     stream_config.sample_rate.0 as f64 / sample_rate as f64,
                                     params,
-                                    CHUNK_SIZE as usize,
+                                    chunk_size as usize,
                                     chans,
                                 );
                                 let mut seek = false;
@@ -245,7 +248,10 @@ impl SourceHandler {
                                     if let Ok(command) = rx.try_recv() {
                                         match command {
                                             InSourceControl::StopStream => {
-                                                timer.store(0, Ordering::Relaxed);
+                                                *timer.lock().unwrap() = PausableClock::new(
+                                                    Duration::from_millis(0),
+                                                    true,
+                                                );
                                                 packet_control.store(true, Ordering::Relaxed);
                                                 break;
                                             }
@@ -262,7 +268,7 @@ impl SourceHandler {
                                     let mut left = vec![];
                                     let mut right = vec![];
 
-                                    for _ in 0..(CHUNK_SIZE) {
+                                    for _ in 0..(chunk_size) {
                                         left.push(lcon.recv().unwrap());
                                         right.push(rcon.recv().unwrap());
                                     }
@@ -273,15 +279,10 @@ impl SourceHandler {
                                     for sample in out {
                                         ttx.send(*sample).unwrap();
                                     }
-                                    timer.store(
-                                        // TODO Привязать timer к CHUNK_SIZE
-                                        // или заменить на pausable_timer
-                                        timer.load(Ordering::Relaxed) + 1,
-                                        Ordering::Relaxed,
-                                    );
                                 }
                                 if !seek {
-                                    timer.store(0, Ordering::Relaxed);
+                                    *timer.lock().unwrap() =
+                                        PausableClock::new(Duration::from_millis(0), is_paused);
                                 }
                             }))
                     }

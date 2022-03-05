@@ -46,7 +46,7 @@ impl Stream {
                 Err(_) => 0.0,
             })
             .unwrap();
-            let paused = Arc::new(AtomicBool::new(false));
+            let paused = Arc::new(AtomicBool::new(true));
             let config = Arc::new(Mutex::new(config));
             let stream = Stream {
                 stream_control_rx,
@@ -54,7 +54,7 @@ impl Stream {
                 paused: paused.clone(),
             };
             temp_tx.send((tx, config, volume, paused)).unwrap();
-            stream.stream.play().unwrap();
+            stream.stream.pause().unwrap();
             loop {
                 if let Ok(command) = stream.stream_control_rx.recv() {
                     match command {

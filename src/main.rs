@@ -85,12 +85,14 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                                     rpc.ui
                                         .paused
                                         .store(false, std::sync::atomic::Ordering::SeqCst);
+                                    rpc.ui.timer.lock().unwrap().resume();
                                 }
                                 false => {
                                     rpc.ui.control_tx.send(Control::Pause).unwrap();
                                     rpc.ui
                                         .paused
                                         .store(true, std::sync::atomic::Ordering::SeqCst);
+                                    rpc.ui.timer.lock().unwrap().pause();
                                 }
                             }
                         }
@@ -100,8 +102,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                                 .control_tx
                                 .send(Control::AddTrack(
                                     rpc.ui.current.as_ref().unwrap().clone(),
-                                    (rpc.ui.timer.load(std::sync::atomic::Ordering::Relaxed) / 4)
-                                        + 15,
+                                    Duration::from_secs(
+                                        (rpc.ui.timer.lock().unwrap().now().elapsed_millis()
+                                            / 1000)
+                                            + 15,
+                                    ),
                                 ))
                                 .unwrap();
                         }
@@ -111,10 +116,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                                 .control_tx
                                 .send(Control::AddTrack(
                                     rpc.ui.current.as_ref().unwrap().clone(),
-                                    ((rpc.ui.timer.load(std::sync::atomic::Ordering::Relaxed) / 4)
-                                        as isize
-                                        - 15)
-                                        .max(0) as usize,
+                                    Duration::from_secs(
+                                        ((rpc.ui.timer.lock().unwrap().now().elapsed_millis()
+                                            / 1000) as i64
+                                            - 15)
+                                            .max(0) as u64,
+                                    ),
                                 ))
                                 .unwrap();
                         }
@@ -126,7 +133,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                             rpc.ui.current = Some(track_path.clone());
                             rpc.ui
                                 .control_tx
-                                .send(Control::AddTrack(track_path, 0))
+                                .send(Control::AddTrack(track_path, Duration::from_secs(0)))
                                 .unwrap();
                             rpc.ui.cursor = 0;
                         }
@@ -177,11 +184,12 @@ fn ui<B: Backend>(f: &mut Frame<B>, rpc: &Rpc) {
         .margin(1)
         .constraints([Constraint::Length(1)].as_ref())
         .split(size);
+    let now = rpc.ui.timer.lock().unwrap().now().elapsed_millis() / 1000;
     let msg = format!(
         "cur vol: {}, cur time: {}:{:02}",
         rpc.volume(),
-        (rpc.ui.timer.load(std::sync::atomic::Ordering::Relaxed) / 4) / 60,
-        (rpc.ui.timer.load(std::sync::atomic::Ordering::Relaxed) / 4) % 60,
+        now / 60,
+        now % 60,
     );
     let mut text = Text::from(Spans::from(msg));
     text.patch_style(Style::default());

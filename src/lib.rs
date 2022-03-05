@@ -2,13 +2,15 @@
 mod source_handler;
 mod stream;
 
+use pausable_clock::*;
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         mpsc::{sync_channel, Receiver, SyncSender},
-        Arc,
+        Arc, Mutex,
     },
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use source_handler::*;
@@ -20,7 +22,7 @@ pub struct Source {}
 pub enum Control {
     Resume,
     Pause,
-    AddTrack(String, usize),
+    AddTrack(String, Duration),
     NextTrack,
     StopCurTrack,
     Seek,
@@ -68,7 +70,7 @@ pub struct Ui {
     // pub source_rx: Receiver<SourceResponse>,
     pub queue: Vec<String>,
     pub current: Option<String>,
-    pub timer: Arc<AtomicUsize>,
+    pub timer: Arc<Mutex<PausableClock>>,
     pub paused: Arc<AtomicBool>,
     pub volume: Arc<AtomicU8>,
     pub control_tx: SyncSender<Control>,
@@ -91,7 +93,10 @@ impl Rpc {
         let (source_control_tx, source_control_rx) = sync_channel(3);
         let (stream, sample_tx, stream_config, volume, paused) = Stream::start(stream_control_rx);
         // let (source_response_tx, source_response_rx) = sync_channel(3);
-        let timer = Arc::new(AtomicUsize::new(0));
+        let timer = Arc::new(Mutex::new(PausableClock::new(
+            Duration::from_secs(0),
+            paused.load(Ordering::Relaxed),
+        )));
         let source_processor = SourceHandler {
             source_control_rx,
             stream_config,
