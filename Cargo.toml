@@ -7,18 +7,14 @@ edition = "2021"
 
 
 [dependencies]
-cpal = "*"
-pausable_clock = "*"
+portaudio = "*"
 crossterm = "0.23"
-clap = "*"
 anyhow = "*"
-claxon = "*"
 ringbuf = "0.2.6"
 itertools = "0.10.3"
 tui = {path = "src/tui-rs"}
 # using custom tui-rs version with changes from this fork https://github.com/Phoenix-Chen/tui-rs
 crossbeam = "*"
-rubato = "*"
 symphonia = {version="*", features=["aac", "alac", "mp3", "isomp4"]}
 rb = "0.4.0"
 

@@ -41,24 +41,19 @@ fn main() -> anyhow::Result<()> {
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<()> {
     loop {
-        // match &rpc.current {
-        //     Some(current) => {
-        //         if !current.is_running() {
-        //             rpc.current = None;
-        //             rpc.curtimer = Some(Arc::new(PausableClock::default()));
-        //             rpc.curtimer.as_ref().unwrap().pause();
-        //         }
-        //     }
-        //     None => {
-        //         if !rpc.queue.is_empty() {
-        //             rpc.start_next_track()
-        //         }
-        //     }
-        // }
         terminal.draw(|f| ui(f, &rpc))?;
+        if let Some(cur) = rpc.current.as_mut() {
+            // if let true = cur.streamer.sample_tx.is_empty() {
+            //     rpc.current = None;
+            // }
+            if cur.timer.as_secs() > cur.metadata.full_time_secs.unwrap() {
+                rpc.current = None;
+            }
+        }
         if let Ok(true) = poll(Duration::from_millis(100)) {
             if let Event::Key(key) = event::read()? {
                 let volume = rpc.volume();
+
                 match rpc.ui.ui_state {
                     InputMode::Normal => match key.code {
                         KeyCode::Char('q') | KeyCode::Char('й') => {
@@ -67,7 +62,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                         KeyCode::Char('+') => rpc.set_volume(volume as i8 + 5),
                         KeyCode::Char('-') => rpc.set_volume(volume as i8 - 5),
                         KeyCode::Char('s') => {
-                            rpc.ui.control_tx.send(Control::StopCurTrack).unwrap()
+                            if let Some(cur) = &rpc.current {
+                                cur.streamer.control_tx.send(SourceControl::Stop).unwrap();
+                            }
+                            rpc.current = None;
                         }
                         KeyCode::Char('a') => match rpc.ui.add_track {
                             true => {
@@ -78,63 +76,48 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                                 rpc.ui.ui_state = InputMode::AddTrack;
                             }
                         },
-                        KeyCode::Char(' ') => {
-                            match rpc.ui.paused.load(std::sync::atomic::Ordering::Relaxed) {
-                                true => {
-                                    rpc.ui.control_tx.send(Control::Resume).unwrap();
-                                    rpc.ui
-                                        .paused
-                                        .store(false, std::sync::atomic::Ordering::SeqCst);
-                                    rpc.ui.timer.lock().unwrap().resume();
-                                }
-                                false => {
-                                    rpc.ui.control_tx.send(Control::Pause).unwrap();
-                                    rpc.ui
-                                        .paused
-                                        .store(true, std::sync::atomic::Ordering::SeqCst);
-                                    rpc.ui.timer.lock().unwrap().pause();
+                        KeyCode::Char(' ') => match rpc.ui.paused {
+                            true => {
+                                rpc.ui.paused = false;
+                                match &mut rpc.current {
+                                    Some(cur) => {
+                                        cur.timer.resume();
+                                        cur.streamer.stream.start().unwrap();
+                                    }
+                                    None => (),
                                 }
                             }
-                        }
+                            false => {
+                                rpc.ui.paused = true;
+                                match &mut rpc.current {
+                                    Some(cur) => {
+                                        cur.timer.pause();
+                                        cur.streamer.stream.stop().unwrap();
+                                    }
+                                    None => (),
+                                }
+                            }
+                        },
                         KeyCode::Right => {
-                            rpc.ui.control_tx.send(Control::Seek).unwrap();
-                            rpc.ui
-                                .control_tx
-                                .send(Control::AddTrack(
-                                    rpc.ui.current.as_ref().unwrap().clone(),
-                                    Duration::from_secs(
-                                        (rpc.ui.timer.lock().unwrap().now().elapsed_millis()
-                                            / 1000)
-                                            + 15,
-                                    ),
-                                ))
-                                .unwrap();
+                            if let Some(cur) = &mut rpc.current {
+                                rpc.current = cur.seek_forward(Duration::from_secs(15));
+                            }
                         }
                         KeyCode::Left => {
-                            rpc.ui.control_tx.send(Control::Seek).unwrap();
-                            rpc.ui
-                                .control_tx
-                                .send(Control::AddTrack(
-                                    rpc.ui.current.as_ref().unwrap().clone(),
-                                    Duration::from_secs(
-                                        ((rpc.ui.timer.lock().unwrap().now().elapsed_millis()
-                                            / 1000) as i64
-                                            - 15)
-                                            .max(0) as u64,
-                                    ),
-                                ))
-                                .unwrap();
+                            if let Some(cur) = &mut rpc.current {
+                                rpc.current = cur.seek_backward(Duration::from_secs(5));
+                            }
                         }
                         _ => {}
                     },
                     InputMode::AddTrack => match key.code {
                         KeyCode::Enter => {
                             let track_path: String = rpc.ui.tmp_add_track.drain(..).collect();
-                            rpc.ui.current = Some(track_path.clone());
-                            rpc.ui
-                                .control_tx
-                                .send(Control::AddTrack(track_path, Duration::from_secs(0)))
-                                .unwrap();
+                            rpc.current =
+                                Some(Current::new(track_path, rpc.volume.clone(), rpc.ui.paused));
+                            if !rpc.ui.paused {
+                                rpc.current.as_mut().unwrap().timer.start();
+                            }
                             rpc.ui.cursor = 0;
                         }
                         KeyCode::Char(c) => {
@@ -184,12 +167,28 @@ fn ui<B: Backend>(f: &mut Frame<B>, rpc: &Rpc) {
         .margin(1)
         .constraints([Constraint::Length(1)].as_ref())
         .split(size);
-    let now = rpc.ui.timer.lock().unwrap().now().elapsed_millis() / 1000;
+    // let now = rpc.ui.timer.lock().unwrap().now().elapsed_millis() / 1000;
+    let now = match &rpc.current {
+        Some(cur) => cur.timer.as_secs(),
+        None => 0,
+    };
     let msg = format!(
-        "cur vol: {}, cur time: {}:{:02}",
+        "cur vol: {}, cur time: {}:{:02}, {}, {}",
         rpc.volume(),
         now / 60,
         now % 60,
+        match rpc.ui.paused {
+            true => "paused",
+            false => "resumed",
+        },
+        match &rpc.current {
+            Some(cur) => cur
+                .metadata
+                .title
+                .clone()
+                .unwrap_or_else(|| "None".to_string()),
+            None => "None".to_string(),
+        }
     );
     let mut text = Text::from(Spans::from(msg));
     text.patch_style(Style::default());
