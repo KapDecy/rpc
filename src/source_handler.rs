@@ -9,7 +9,7 @@ use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error;
 use symphonia::core::{audio::Signal, formats::FormatReader};
 
-use crate::SourceControl;
+use crate::stream::SourceControl;
 
 pub fn new_source_handle(
     mut format: Box<dyn FormatReader>,
