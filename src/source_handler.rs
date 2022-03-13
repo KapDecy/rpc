@@ -1,39 +1,15 @@
 use std::{
     iter::zip,
-    sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
-    thread::{self, JoinHandle},
+    thread::{self},
     time::Duration,
 };
 
 use crossbeam::channel::{Receiver, Sender};
-use itertools::Itertools;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error;
-use symphonia::core::formats::FormatOptions;
-use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 use symphonia::core::{audio::Signal, formats::FormatReader};
 
 use crate::SourceControl;
-
-// pub enum SourceResponse {
-//     Complete,
-// }
-
-// pub(crate) enum SourceControl {
-//     AddTrack(String, Duration),
-//     Stop,
-//     Seek,
-// }
-
-pub(crate) enum InSourceControl {
-    StopStream,
-    Seek,
-}
 
 pub fn new_source_handle(
     mut format: Box<dyn FormatReader>,

@@ -1,11 +1,8 @@
 #![feature(thread_is_running)]
 #![feature(cell_update)]
-// mod source_handler;
-// mod stream;
 mod source_handler;
 mod timer;
 
-use crossterm::style::Stylize;
 use portaudio::{self as pa, NonBlocking, Output, Stream};
 use source_handler::new_source_handle;
 use timer::*;
@@ -20,14 +17,12 @@ use std::{
     time::Duration,
 };
 
-use itertools::Itertools;
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
-use symphonia::core::errors::Error;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use symphonia::core::{audio::Signal, meta::Tag};
+
+use audiotags::Tag;
 
 pub enum SourceControl {
     Stop,
@@ -41,21 +36,25 @@ pub struct Streamer {
     pub control_tx: Sender<SourceControl>,
 }
 
-pub struct SongMetadata {
+pub struct TrackMetadata {
     pub full_time_secs: Option<u64>,
     pub path: String,
+    pub file_stem: String,
     pub title: Option<String>,
     pub artist: Option<String>,
+    pub album: Option<String>,
+    pub year: Option<i32>,
 }
 
 pub struct Current {
     pub streamer: Streamer,
-    pub metadata: SongMetadata,
+    pub metadata: TrackMetadata,
     pub timer: Timer,
 }
 
 impl Current {
     pub fn new(path: String, volume: Arc<AtomicU8>, paused_on_start: bool) -> Self {
+        let path = path.trim().trim_matches('"');
         let src = std::fs::File::open(path.trim().trim_matches('"')).unwrap();
         let mss = MediaSourceStream::new(Box::new(src), Default::default());
         let hint = Hint::new();
@@ -82,7 +81,8 @@ impl Current {
         )
         .unwrap();
         let (control_tx, control_rx) = channel::bounded(3);
-        let r = path.clone();
+        let r = path.to_string();
+        let tag = Tag::new().read_from_path(path).unwrap();
 
         let mut cur = Current {
             streamer: Streamer {
@@ -97,11 +97,19 @@ impl Current {
                 sample_tx,
                 control_tx,
             },
-            metadata: SongMetadata {
+            metadata: TrackMetadata {
                 full_time_secs: Some(full_time_secs),
-                path,
-                title: None,
-                artist: None,
+                path: path.to_string(),
+                file_stem: std::path::Path::new(&r)
+                    .file_stem()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+                title: tag.title().map(|x| x.to_string()),
+                artist: tag.artist().map(|x| x.to_string()),
+                album: tag.album().map(|x| x.title.to_string()),
+                year: tag.year(),
             },
             timer: Timer::new(),
         };
@@ -124,18 +132,11 @@ impl Current {
                 }
             }
         }
-        // TODO разобраться с метадатой
-        // ниже затычка
+
         if cur.metadata.title == None {
-            cur.metadata.title = Some(
-                std::path::Path::new(&r)
-                    .file_stem()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .to_string(),
-            );
+            cur.metadata.title = Some(cur.metadata.file_stem.clone());
         }
+
         cur
     }
 
@@ -170,9 +171,7 @@ impl Current {
         )
         .unwrap();
         let (control_tx, control_rx) = channel::bounded(3);
-        let r = self.metadata.path.clone();
-
-        let mut cur = Current {
+        let mut cur: _ = Current {
             streamer: Streamer {
                 stream,
                 source_handler: new_source_handle(format, dur, sample_tx.clone(), control_rx),
@@ -180,11 +179,14 @@ impl Current {
                 sample_tx,
                 control_tx,
             },
-            metadata: SongMetadata {
+            metadata: TrackMetadata {
                 full_time_secs: Some(full_time_secs),
                 path: self.metadata.path.clone(),
-                title: None,
-                artist: None,
+                file_stem: self.metadata.file_stem.clone(),
+                title: self.metadata.title.clone(),
+                artist: self.metadata.artist.clone(),
+                album: self.metadata.album.clone(),
+                year: self.metadata.year,
             },
             timer: self.timer.clone(),
         };
@@ -207,17 +209,8 @@ impl Current {
                 }
             }
         }
-        // TODO разобраться с метадатой
-        // ниже затычка
         if cur.metadata.title == None {
-            cur.metadata.title = Some(
-                std::path::Path::new(&r)
-                    .file_stem()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .to_string(),
-            );
+            cur.metadata.title = Some(self.metadata.file_stem.clone());
         }
         Some(cur)
     }
@@ -232,14 +225,6 @@ impl Current {
         self.seek(Duration::from_secs(self.timer.as_secs()))
     }
 }
-
-// impl Current {
-//     pub fn seek_to(&mut self, dur: Duration) {
-//         self.streamer.control_tx.send(SourceControl::SeekTo(dur)).unwrap();
-//     }
-
-//     pub fn seek_forward(&mut self)
-// }
 
 pub enum InputMode {
     Normal,
@@ -257,7 +242,7 @@ pub struct Rpc {
     pub ui: Ui,
     pub current: Option<Current>,
     pub queue: Vec<String>,
-    pub library: Vec<SongMetadata>,
+    pub library: Vec<TrackMetadata>,
     pub volume: Arc<AtomicU8>,
 }
 

@@ -11,8 +11,8 @@ use tui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
-    text::{Spans, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    text::{Span, Spans, Text},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame, Terminal,
 };
 
@@ -41,15 +41,33 @@ fn main() -> anyhow::Result<()> {
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<()> {
     loop {
-        terminal.draw(|f| ui(f, &rpc))?;
         if let Some(cur) = rpc.current.as_mut() {
-            // if let true = cur.streamer.sample_tx.is_empty() {
-            //     rpc.current = None;
-            // }
             if cur.timer.as_secs() > cur.metadata.full_time_secs.unwrap() {
-                rpc.current = None;
+                match rpc.queue.is_empty() {
+                    false => {
+                        let track_path = rpc.queue.remove(0);
+                        rpc.current =
+                            Some(Current::new(track_path, rpc.volume.clone(), rpc.ui.paused));
+                        if !rpc.ui.paused {
+                            rpc.current.as_mut().unwrap().timer.start();
+                        }
+                    }
+                    true => rpc.current = None,
+                }
+            }
+        } else {
+            match rpc.queue.is_empty() {
+                false => {
+                    let track_path = rpc.queue.remove(0);
+                    rpc.current = Some(Current::new(track_path, rpc.volume.clone(), rpc.ui.paused));
+                    if !rpc.ui.paused {
+                        rpc.current.as_mut().unwrap().timer.start();
+                    }
+                }
+                true => (),
             }
         }
+        terminal.draw(|f| ui(f, &rpc))?;
         if let Ok(true) = poll(Duration::from_millis(100)) {
             if let Event::Key(key) = event::read()? {
                 let volume = rpc.volume();
@@ -61,13 +79,13 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                         }
                         KeyCode::Char('+') => rpc.set_volume(volume as i8 + 5),
                         KeyCode::Char('-') => rpc.set_volume(volume as i8 - 5),
-                        KeyCode::Char('s') => {
+                        KeyCode::Char('s') | KeyCode::Char('ы') => {
                             if let Some(cur) = &rpc.current {
                                 cur.streamer.control_tx.send(SourceControl::Stop).unwrap();
                             }
                             rpc.current = None;
                         }
-                        KeyCode::Char('a') => match rpc.ui.add_track {
+                        KeyCode::Char('a') | KeyCode::Char('ф') => match rpc.ui.add_track {
                             true => {
                                 rpc.ui.add_track = false;
                             }
@@ -113,11 +131,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                     InputMode::AddTrack => match key.code {
                         KeyCode::Enter => {
                             let track_path: String = rpc.ui.tmp_add_track.drain(..).collect();
-                            rpc.current =
-                                Some(Current::new(track_path, rpc.volume.clone(), rpc.ui.paused));
-                            if !rpc.ui.paused {
-                                rpc.current.as_mut().unwrap().timer.start();
-                            }
+                            rpc.queue.push(track_path);
+                            // rpc.current =
+                            //     Some(Current::new(track_path, rpc.volume.clone(), rpc.ui.paused));
+                            // if !rpc.ui.paused {
+                            //     rpc.current.as_mut().unwrap().timer.start();
+                            // }
                             rpc.ui.cursor = 0;
                         }
                         KeyCode::Char(c) => {
@@ -165,34 +184,62 @@ fn ui<B: Backend>(f: &mut Frame<B>, rpc: &Rpc) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints([Constraint::Length(1)].as_ref())
+        .constraints(
+            [
+                Constraint::Length(3),
+                // Constraint::Length(1),
+                Constraint::Min(5),
+            ]
+            .as_ref(),
+        )
         .split(size);
     // let now = rpc.ui.timer.lock().unwrap().now().elapsed_millis() / 1000;
     let now = match &rpc.current {
         Some(cur) => cur.timer.as_secs(),
         None => 0,
     };
+    let cur_full_time = match &rpc.current {
+        Some(cur) => cur.metadata.full_time_secs.unwrap(),
+        None => 0,
+    };
     let msg = format!(
-        "cur vol: {}, cur time: {}:{:02}, {}, {}",
+        "cur vol: {}, {}:{:02}/{}:{:02}, {}, {}",
         rpc.volume(),
         now / 60,
         now % 60,
+        cur_full_time / 60,
+        cur_full_time % 60,
         match rpc.ui.paused {
             true => "paused",
             false => "resumed",
         },
         match &rpc.current {
-            Some(cur) => cur
-                .metadata
-                .title
-                .clone()
-                .unwrap_or_else(|| "None".to_string()),
+            Some(cur) => match cur.metadata.title.clone() {
+                Some(title) => title,
+                None => "No title".to_string(),
+            },
             None => "None".to_string(),
         }
     );
     let mut text = Text::from(Spans::from(msg));
     text.patch_style(Style::default());
-    f.render_widget(Paragraph::new(text), chunks[0]);
+    f.render_widget(
+        Paragraph::new(text).block(Block::default().borders(Borders::ALL)),
+        chunks[0],
+    );
+
+    let queue: Vec<ListItem> = rpc
+        .queue
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let content = vec![Spans::from(Span::raw(format!("{}: {}", i, m)))];
+            ListItem::new(content)
+        })
+        .collect();
+    let queue = List::new(queue).block(Block::default().borders(Borders::ALL).title("Queue"));
+    f.render_widget(queue, chunks[1]);
+
     if rpc.ui.add_track {
         let block = Block::default().title("Add track").borders(Borders::ALL);
         let area = centered_rect(60, 20, size);

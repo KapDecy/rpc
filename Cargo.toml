@@ -17,6 +17,7 @@ tui = {path = "src/tui-rs"}
 crossbeam = "*"
 symphonia = {version="*", features=["aac", "alac", "mp3", "isomp4"]}
 rb = "0.4.0"
+audiotags= "*"
 
 [profile.dev]
 opt-level = 3
