@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 use std::{io, sync::Arc};
 
@@ -72,11 +73,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
         }
         if let Some(cur) = rpc.current.as_mut() {
             if cur.timer.as_secs() > cur.metadata.full_time_secs.unwrap() {
-                match rpc.queue.is_empty() {
-                    false => {
-                        let track_path = rpc.queue.remove(0);
+                match rpc.ui.repeat {
+                    true => {
                         rpc.current = Some(Current::new(
-                            track_path,
+                            rpc.current.unwrap().metadata.path,
                             rpc.volume.clone(),
                             rpc.ui.paused,
                             rpc.device.clone(),
@@ -85,7 +85,21 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                             rpc.current.as_mut().unwrap().timer.start();
                         }
                     }
-                    true => rpc.current = None,
+                    false => match rpc.queue.is_empty() {
+                        false => {
+                            let track_path = rpc.queue.remove(0);
+                            rpc.current = Some(Current::new(
+                                track_path,
+                                rpc.volume.clone(),
+                                rpc.ui.paused,
+                                rpc.device.clone(),
+                            ));
+                            if !rpc.ui.paused {
+                                rpc.current.as_mut().unwrap().timer.start();
+                            }
+                        }
+                        true => rpc.current = None,
+                    },
                 }
             }
         } else {
@@ -134,14 +148,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                             }
                         },
                         KeyCode::Char('r') => {
-                            rpc.device =
-                                Arc::new(cpal::default_host().default_output_device().unwrap());
-                            if let Some(cur) = rpc.current.as_mut() {
-                                // if cur.streamer.device.name().unwrap() != rpc.device.name().unwrap()
-                                {
-                                    rpc.current = cur.change_device(rpc.device.clone());
-                                }
-                            }
+                            rpc.ui.repeat = !rpc.ui.repeat;
                         }
                         KeyCode::Char(' ') => match rpc.ui.paused {
                             true => {
@@ -182,12 +189,17 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                     InputMode::AddTrack => match key.code {
                         KeyCode::Enter => {
                             let track_path: String = rpc.ui.tmp_add_track.drain(..).collect();
-                            rpc.queue.push(track_path);
-                            // rpc.current =
-                            //     Some(Current::new(track_path, rpc.volume.clone(), rpc.ui.paused));
-                            // if !rpc.ui.paused {
-                            //     rpc.current.as_mut().unwrap().timer.start();
-                            // }
+                            match Path::new(track_path.trim_matches('"')).exists() {
+                                true => {
+                                    rpc.queue.push(track_path);
+                                    // rpc.current =
+                                    //     Some(Current::new(track_path, rpc.volume.clone(), rpc.ui.paused));
+                                    // if !rpc.ui.paused {
+                                    //     rpc.current.as_mut().unwrap().timer.start();
+                                    // }
+                                }
+                                false => (),
+                            }
                             rpc.ui.cursor = 0;
                         }
                         KeyCode::Char(c) => {
@@ -234,7 +246,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, rpc: &Rpc) {
     f.render_widget(Clear, size);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .margin(1)
+        .margin(0)
         .constraints(
             [
                 Constraint::Length(3),
@@ -254,12 +266,16 @@ fn ui<B: Backend>(f: &mut Frame<B>, rpc: &Rpc) {
         None => 0,
     };
     let msg = format!(
-        "cur vol: {}, {}:{:02}/{}:{:02}, {}, {}",
+        "cur vol: {}, {}:{:02}/{}:{:02} {}, {}, {}",
         rpc.volume(),
         now / 60,
         now % 60,
         cur_full_time / 60,
         cur_full_time % 60,
+        match rpc.ui.repeat {
+            true => "r",
+            false => "n",
+        },
         match rpc.ui.paused {
             true => "paused",
             false => "resumed",

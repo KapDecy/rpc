@@ -269,7 +269,7 @@ impl Current {
                 stream: Box::new(stream),
                 source_handler: new_source_handle(
                     format,
-                    Duration::from_secs(self.timer.as_secs()),
+                    Duration::from_secs(self.timer.as_secs() - 1),
                     sample_tx.clone(),
                     control_rx,
                     stream_config.clone(),

@@ -19,6 +19,7 @@ pub enum InputMode {
     AddTrack,
 }
 pub struct Ui {
+    pub repeat: bool,
     pub ui_counter: u32,
     pub ui_state: InputMode,
     pub add_track: bool,
@@ -45,6 +46,7 @@ impl Rpc {
         );
         Rpc {
             ui: Ui {
+                repeat: false,
                 ui_counter: 0,
                 ui_state: InputMode::Normal,
                 add_track: false,
