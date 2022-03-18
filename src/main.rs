@@ -1,11 +1,14 @@
-use std::io;
 use std::time::Duration;
+use std::{io, sync::Arc};
 
+use cpal::traits::{DeviceTrait, HostTrait};
 use crossterm::{
     event::{self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use log::info;
+// use flexi_logger::{FileSpec, Logger, WriteMode};
 use rpc::{
     stream::{Current, SourceControl},
     InputMode, Rpc,
@@ -20,6 +23,19 @@ use tui::{
 };
 
 fn main() -> anyhow::Result<()> {
+    // let _logger = Logger::try_with_str("info, my::critical::module=trace")?
+    //     .log_to_file(
+    //         FileSpec::default()
+    //             .directory("log_files")
+    //             .basename("rpc")
+    //             .discriminant("def")
+    //             .suffix("log"),
+    //     )
+    //     .write_mode(WriteMode::BufferAndFlush)
+    //     .start()?;
+    // debug!("started");
+    info!("started");
+    // error!("started");
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -44,13 +60,27 @@ fn main() -> anyhow::Result<()> {
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<()> {
     loop {
+        rpc.ui.ui_counter += 1;
+        if rpc.ui.ui_counter >= 100 {
+            rpc.ui.ui_counter = 0;
+            rpc.device = Arc::new(cpal::default_host().default_output_device().unwrap());
+            if let Some(cur) = rpc.current.as_mut() {
+                if cur.streamer.device.name().unwrap() != rpc.device.name().unwrap() {
+                    rpc.current = cur.change_device(rpc.device.clone());
+                }
+            }
+        }
         if let Some(cur) = rpc.current.as_mut() {
             if cur.timer.as_secs() > cur.metadata.full_time_secs.unwrap() {
                 match rpc.queue.is_empty() {
                     false => {
                         let track_path = rpc.queue.remove(0);
-                        rpc.current =
-                            Some(Current::new(track_path, rpc.volume.clone(), rpc.ui.paused));
+                        rpc.current = Some(Current::new(
+                            track_path,
+                            rpc.volume.clone(),
+                            rpc.ui.paused,
+                            rpc.device.clone(),
+                        ));
                         if !rpc.ui.paused {
                             rpc.current.as_mut().unwrap().timer.start();
                         }
@@ -62,7 +92,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
             match rpc.queue.is_empty() {
                 false => {
                     let track_path = rpc.queue.remove(0);
-                    rpc.current = Some(Current::new(track_path, rpc.volume.clone(), rpc.ui.paused));
+                    rpc.current = Some(Current::new(
+                        track_path,
+                        rpc.volume.clone(),
+                        rpc.ui.paused,
+                        rpc.device.clone(),
+                    ));
                     if !rpc.ui.paused {
                         rpc.current.as_mut().unwrap().timer.start();
                     }
@@ -70,8 +105,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                 true => (),
             }
         }
+
         terminal.draw(|f| ui(f, &rpc))?;
-        if let Ok(true) = poll(Duration::from_millis(100)) {
+        if let Ok(true) = poll(Duration::from_millis(10)) {
             if let Event::Key(key) = event::read()? {
                 let volume = rpc.volume();
 
@@ -97,13 +133,24 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                                 rpc.ui.ui_state = InputMode::AddTrack;
                             }
                         },
+                        KeyCode::Char('r') => {
+                            rpc.device =
+                                Arc::new(cpal::default_host().default_output_device().unwrap());
+                            if let Some(cur) = rpc.current.as_mut() {
+                                // if cur.streamer.device.name().unwrap() != rpc.device.name().unwrap()
+                                {
+                                    rpc.current = cur.change_device(rpc.device.clone());
+                                }
+                            }
+                        }
                         KeyCode::Char(' ') => match rpc.ui.paused {
                             true => {
                                 rpc.ui.paused = false;
                                 match &mut rpc.current {
                                     Some(cur) => {
+                                        cur.streamer.paused = false;
                                         cur.timer.resume();
-                                        cur.streamer.stream.start().unwrap();
+                                        cur.streamer.stream.play().unwrap();
                                     }
                                     None => (),
                                 }
@@ -112,8 +159,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                                 rpc.ui.paused = true;
                                 match &mut rpc.current {
                                     Some(cur) => {
+                                        cur.streamer.paused = true;
                                         cur.timer.pause();
-                                        cur.streamer.stream.stop().unwrap();
+                                        cur.streamer.stream.pause().unwrap();
                                     }
                                     None => (),
                                 }
