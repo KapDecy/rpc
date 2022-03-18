@@ -7,8 +7,7 @@ edition = "2021"
 
 
 [dependencies]
-cpal = "*"
-rubato = "*"
+portaudio = "*"
 crossterm = "0.23"
 anyhow = "*"
 ringbuf = "0.2.6"
@@ -19,8 +18,6 @@ crossbeam = "*"
 symphonia = {version="*", features=["aac", "alac", "mp3", "isomp4"]}
 rb = "0.4.0"
 audiotags= "*"
-flexi_logger = "0.22"
-log = "0.4"
 
 [profile.dev]
 opt-level = 3

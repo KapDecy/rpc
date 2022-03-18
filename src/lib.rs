@@ -1,12 +1,9 @@
 #![feature(thread_is_running)]
 #![feature(cell_update)]
-#![feature(duration_constants)]
-#![feature(thread_id_value)]
 pub mod source_handler;
 pub mod stream;
 pub mod timer;
 
-use cpal::{traits::HostTrait, Device};
 use stream::{Current, TrackMetadata};
 
 use std::sync::{
@@ -19,7 +16,6 @@ pub enum InputMode {
     AddTrack,
 }
 pub struct Ui {
-    pub ui_counter: u32,
     pub ui_state: InputMode,
     pub add_track: bool,
     pub paused: bool,
@@ -33,19 +29,12 @@ pub struct Rpc {
     pub queue: Vec<String>,
     pub library: Vec<TrackMetadata>,
     pub volume: Arc<AtomicU8>,
-    pub device: Arc<Device>,
 }
 
 impl Rpc {
     pub fn new() -> Self {
-        let host = cpal::default_host();
-        let device = Arc::new(
-            host.default_output_device()
-                .expect("no output device available"),
-        );
         Rpc {
             ui: Ui {
-                ui_counter: 0,
                 ui_state: InputMode::Normal,
                 add_track: false,
                 paused: false,
@@ -56,7 +45,6 @@ impl Rpc {
             queue: vec![],
             library: vec![],
             volume: Arc::new(AtomicU8::new(50)),
-            device,
         }
     }
 
@@ -75,6 +63,7 @@ impl Rpc {
     }
 
     pub fn time_as_secs(&mut self) -> u64 {
+        // self.current..timer.as_secs()
         if let Some(cur) = &mut self.current {
             cur.timer.as_secs()
         } else {
