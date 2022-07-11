@@ -7,6 +7,7 @@ edition = "2021"
 
 
 [dependencies]
+walkdir = "*"
 cpal = "*"
 rubato = "*"
 crossterm = "0.23"
@@ -21,6 +22,8 @@ rb = "0.4.0"
 audiotags= "*"
 flexi_logger = "0.22"
 log = "0.4"
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
 
 [profile.dev]
 opt-level = 3

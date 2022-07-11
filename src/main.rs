@@ -1,4 +1,7 @@
+use std::net::ToSocketAddrs;
+use std::ops::Add;
 use std::path::Path;
+use std::str::FromStr;
 use std::time::Duration;
 use std::{io, sync::Arc};
 
@@ -8,18 +11,21 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use itertools::Itertools;
 use log::info;
+use rpc::stream::TrackMetadata;
 // use flexi_logger::{FileSpec, Logger, WriteMode};
 use rpc::{
     stream::{Current, SourceControl},
     InputMode, Rpc,
 };
+use tui::widgets::{Cell, Row};
 use tui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Span, Spans, Text},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Table, TableState, Wrap},
     Frame, Terminal,
 };
 
@@ -60,6 +66,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<()> {
+    rpc.library = rpc::library::load(".library".to_string());
     loop {
         rpc.ui.ui_counter += 1;
         if rpc.ui.ui_counter >= 100 {
@@ -89,7 +96,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                         false => {
                             let track_path = rpc.queue.remove(0);
                             rpc.current = Some(Current::new(
-                                track_path,
+                                track_path.path,
                                 rpc.volume.clone(),
                                 rpc.ui.paused,
                                 rpc.device.clone(),
@@ -107,7 +114,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                 false => {
                     let track_path = rpc.queue.remove(0);
                     rpc.current = Some(Current::new(
-                        track_path,
+                        track_path.path,
                         rpc.volume.clone(),
                         rpc.ui.paused,
                         rpc.device.clone(),
@@ -125,8 +132,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
             if let Event::Key(key) = event::read()? {
                 let volume = rpc.volume();
 
-                match rpc.ui.ui_state {
-                    InputMode::Normal => match key.code {
+                match rpc.ui.input_state {
+                    InputMode::Default => match key.code {
                         KeyCode::Char('q') | KeyCode::Char('й') => {
                             return Ok(());
                         }
@@ -144,7 +151,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                             }
                             false => {
                                 rpc.ui.add_track = true;
-                                rpc.ui.ui_state = InputMode::AddTrack;
+                                rpc.ui.input_state = InputMode::AddTrack;
                             }
                         },
                         KeyCode::Char('r') => {
@@ -184,6 +191,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                                 rpc.current = cur.seek_backward(Duration::from_secs(5));
                             }
                         }
+                        KeyCode::Tab => match rpc.ui.ui_state {
+                            rpc::UiState::Queue => rpc.ui.ui_state = rpc::UiState::Library,
+                            rpc::UiState::Library => rpc.ui.ui_state = rpc::UiState::Queue,
+                        },
                         _ => {}
                     },
                     InputMode::AddTrack => match key.code {
@@ -191,12 +202,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                             let track_path: String = rpc.ui.tmp_add_track.drain(..).collect();
                             match Path::new(track_path.trim_matches('"')).exists() {
                                 true => {
-                                    rpc.queue.push(track_path);
-                                    // rpc.current =
-                                    //     Some(Current::new(track_path, rpc.volume.clone(), rpc.ui.paused));
-                                    // if !rpc.ui.paused {
-                                    //     rpc.current.as_mut().unwrap().timer.start();
-                                    // }
+                                    rpc.queue
+                                        .push(TrackMetadata::from_str(&track_path).unwrap());
                                 }
                                 false => (),
                             }
@@ -214,7 +221,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                             }
                         },
                         KeyCode::Esc => {
-                            rpc.ui.ui_state = InputMode::Normal;
+                            rpc.ui.input_state = InputMode::Default;
                             rpc.ui.add_track = false;
                         }
                         KeyCode::Left => {
@@ -232,6 +239,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                                         rpc.ui.tmp_add_track.len() as u16
                                     }
                                 }
+                            // TODO переработать
                         }
                         _ => {}
                     },
@@ -249,9 +257,10 @@ fn ui<B: Backend>(f: &mut Frame<B>, rpc: &Rpc) {
         .margin(0)
         .constraints(
             [
-                Constraint::Length(3),
+                Constraint::Length(2),
                 // Constraint::Length(1),
                 Constraint::Min(5),
+                Constraint::Length(2),
             ]
             .as_ref(),
         )
@@ -274,47 +283,100 @@ fn ui<B: Backend>(f: &mut Frame<B>, rpc: &Rpc) {
         cur_full_time % 60,
         match rpc.ui.repeat {
             true => "r",
-            false => "n",
+            false => "s",
         },
         match rpc.ui.paused {
             true => "paused",
             false => "resumed",
         },
         match &rpc.current {
-            Some(cur) => match cur.metadata.title.clone() {
-                Some(title) => title,
-                None => "No title".to_string(),
-            },
+            Some(cur) => {
+                let mut s = cur.metadata.file_stem.clone();
+                if s.chars().count() > 50 {
+                    s.truncate(50);
+                    s.push_str("...");
+                }
+                s
+            }
             None => "None".to_string(),
         }
     );
     let mut text = Text::from(Spans::from(msg));
     text.patch_style(Style::default());
     f.render_widget(
-        Paragraph::new(text).block(Block::default().borders(Borders::ALL)),
+        Paragraph::new(text).block(Block::default().borders(Borders::NONE)),
         chunks[0],
     );
+    match rpc.ui.ui_state {
+        rpc::UiState::Queue => {
+            // let queue: Vec<ListItem> = rpc
+            //     .queue
+            //     .iter()
+            //     .enumerate()
+            //     .map(|(i, m)| {
+            //         let content = vec![Spans::from(Span::raw(format!("{}: {}", i, m.file_stem)))];
+            //         ListItem::new(content)
+            //     })
+            //     .collect();
+            // let queue = List::new(queue).block(
+            //     Block::default()
+            //         .borders(Borders::TOP)
+            //         .title("Queue")
+            //         .title_alignment(tui::layout::Alignment::Right),
+            // );
+            // f.render_widget(queue, chunks[1]);
 
-    let queue: Vec<ListItem> = rpc
-        .queue
-        .iter()
-        .enumerate()
-        .map(|(i, m)| {
-            let content = vec![Spans::from(Span::raw(format!("{}: {}", i, m)))];
-            ListItem::new(content)
-        })
-        .collect();
-    let queue = List::new(queue).block(Block::default().borders(Borders::ALL).title("Queue"));
-    f.render_widget(queue, chunks[1]);
+            let selected_style = Style::default().add_modifier(tui::style::Modifier::REVERSED);
+            let header_cells = ["title", "artist", "dur"]
+                .iter()
+                .map(|h| Cell::from(*h).style(Style::default()));
+            let header = Row::new(header_cells).height(1).bottom_margin(1);
+            let rows = rpc
+                .queue
+                .iter()
+                .map(|item| {
+                    let cells = [
+                        Cell::from(item.title.clone().unwrap_or_else(|| item.file_stem.clone())),
+                        Cell::from(item.artist.clone().unwrap_or_else(|| "None".to_string())),
+                        // Cell::from(item.full_time_secs.unwrap().to_string()),
+                        Cell::from(format!(
+                            "{}:{:02}",
+                            item.full_time_secs.unwrap() / 60,
+                            item.full_time_secs.unwrap() % 60
+                        )),
+                    ];
+                    Row::new(cells)
+                })
+                .collect_vec();
+            let t = Table::new(rows)
+                .header(header)
+                .block(Block::default().borders(Borders::TOP).title("queue"))
+                .highlight_style(selected_style)
+                .widths(&[
+                    Constraint::Percentage(33),
+                    Constraint::Percentage(33),
+                    Constraint::Percentage(34),
+                ]);
+            f.render_widget(t, chunks[1]);
+        }
+        rpc::UiState::Library => todo!(),
+    }
 
+    let block = Block::default().title("").borders(Borders::TOP);
+    f.render_widget(block, chunks[2]);
     if rpc.ui.add_track {
-        let block = Block::default().title("Add track").borders(Borders::ALL);
-        let area = centered_rect(60, 20, size);
-        let text = String::from_iter(rpc.ui.tmp_add_track.clone());
+        let block = Block::default()
+            .title("Add track ")
+            .borders(Borders::TOP)
+            .title_alignment(tui::layout::Alignment::Right);
+        let area = chunks[2];
+        let mut chars = rpc.ui.tmp_add_track.clone();
+        chars.insert(0, '>');
+        let text = String::from_iter(chars);
         let text = Paragraph::new(text)
             .block(block)
-            .style(match rpc.ui.ui_state {
-                InputMode::Normal => Style::default(),
+            .style(match rpc.ui.input_state {
+                InputMode::Default => Style::default(),
                 InputMode::AddTrack => Style::default().fg(Color::Yellow),
             })
             .alignment(tui::layout::Alignment::Left)

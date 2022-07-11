@@ -2,6 +2,7 @@
 #![feature(cell_update)]
 #![feature(duration_constants)]
 #![feature(thread_id_value)]
+pub mod library;
 pub mod source_handler;
 pub mod stream;
 pub mod timer;
@@ -9,19 +10,28 @@ pub mod timer;
 use cpal::{traits::HostTrait, Device};
 use stream::{Current, TrackMetadata};
 
-use std::sync::{
-    atomic::{AtomicU8, Ordering},
-    Arc,
+use std::{
+    any::Any,
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc,
+    },
 };
 
 pub enum InputMode {
-    Normal,
+    Default,
     AddTrack,
+}
+
+pub enum UiState {
+    Queue,
+    Library,
 }
 pub struct Ui {
     pub repeat: bool,
     pub ui_counter: u32,
-    pub ui_state: InputMode,
+    pub input_state: InputMode,
+    pub ui_state: UiState,
     pub add_track: bool,
     pub paused: bool,
     pub cursor: u16,
@@ -31,8 +41,8 @@ pub struct Ui {
 pub struct Rpc {
     pub ui: Ui,
     pub current: Option<Current>,
-    pub queue: Vec<String>,
-    pub library: Vec<TrackMetadata>,
+    pub queue: Vec<TrackMetadata>,
+    pub library: Box<dyn Any>,
     pub volume: Arc<AtomicU8>,
     pub device: Arc<Device>,
 }
@@ -48,7 +58,8 @@ impl Rpc {
             ui: Ui {
                 repeat: false,
                 ui_counter: 0,
-                ui_state: InputMode::Normal,
+                input_state: InputMode::Default,
+                ui_state: UiState::Queue,
                 add_track: false,
                 paused: false,
                 cursor: 0,
@@ -56,8 +67,8 @@ impl Rpc {
             },
             current: None,
             queue: vec![],
-            library: vec![],
-            volume: Arc::new(AtomicU8::new(50)),
+            library: todo!(),
+            volume: Arc::new(AtomicU8::new(20)),
             device,
         }
     }
