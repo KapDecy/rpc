@@ -1,22 +1,16 @@
-#![feature(thread_is_running)]
 #![feature(cell_update)]
 #![feature(duration_constants)]
 #![feature(thread_id_value)]
-pub mod library;
+pub mod basslib;
 pub mod source_handler;
 pub mod stream;
 pub mod timer;
 
-use cpal::{traits::HostTrait, Device};
-use stream::{Current, TrackMetadata};
+use basslib::{MediaStream, BASS_POS_BYTE};
+use stream::TrackMetadata;
 
-use std::{
-    any::Any,
-    sync::{
-        atomic::{AtomicU8, Ordering},
-        Arc,
-    },
-};
+
+use basslib::*;
 
 pub enum InputMode {
     Default,
@@ -40,20 +34,15 @@ pub struct Ui {
 
 pub struct Rpc {
     pub ui: Ui,
-    pub current: Option<Current>,
+    pub current: Option<MediaStream>,
     pub queue: Vec<TrackMetadata>,
-    pub library: Box<dyn Any>,
-    pub volume: Arc<AtomicU8>,
-    pub device: Arc<Device>,
+    pub library: Vec<String>,
+    pub volume: u8,
+    pub device: u8,
 }
 
 impl Rpc {
     pub fn new() -> Self {
-        let host = cpal::default_host();
-        let device = Arc::new(
-            host.default_output_device()
-                .expect("no output device available"),
-        );
         Rpc {
             ui: Ui {
                 repeat: false,
@@ -67,32 +56,48 @@ impl Rpc {
             },
             current: None,
             queue: vec![],
-            library: todo!(),
-            volume: Arc::new(AtomicU8::new(20)),
-            device,
+            library: vec![],
+            volume: 20,
+            device: 1,
         }
     }
 
     pub fn volume(&self) -> u8 {
-        self.volume.load(Ordering::Relaxed)
+        self.volume
     }
 
-    pub fn set_volume(&mut self, volume: i8) {
-        if volume > 100 {
-            self.volume.store(100, Ordering::Relaxed)
-        } else if volume < 0 {
-            self.volume.store(0, Ordering::Relaxed)
-        } else {
-            self.volume.store(volume as u8, Ordering::Relaxed)
+    pub fn set_volume(&mut self, volume: u8) {
+        self.volume = volume.clamp(0, 100);
+        if let Some(cur) = self.current.as_ref() {
+            basslib::BSetVolume(cur, (self.volume as f32) / 100.0);
         }
+        // if volume > 100 {
+        //     self.volume= 100
+        // } else if volume < 0 {
+        //     self.volume.store(0, Ordering::Relaxed)
+        // } else {
+        //     self.volume.store(volume as u8, Ordering::Relaxed)
+        // }
     }
 
-    pub fn time_as_secs(&mut self) -> u64 {
+    pub fn time_as_secs(&mut self) -> f64 {
         if let Some(cur) = &mut self.current {
-            cur.timer.as_secs()
+            basslib::BChannelBytes2Seconds(cur, basslib::BChannelGetPosition(cur, BASS_POS_BYTE))
         } else {
-            0
+            0.0
         }
+    }
+
+    pub fn new_media_stream(&self, path: String) -> MediaStream {
+        // TODO проверять, что предыдущий стрим завершен, или закрыть принудительно
+        let ms = MediaStream::new(path);
+        basslib::BSetVolume(&ms, (self.volume as f32) / 100.0);
+        if self.ui.paused {
+            BChannelPause(&ms);
+        } else {
+            BChannelPlay(&ms, 0);
+        };
+        ms
     }
 }
 

@@ -1,11 +1,9 @@
-use std::net::ToSocketAddrs;
-use std::ops::Add;
+use basslib::*;
+use std::io;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
-use std::{io, sync::Arc};
 
-use cpal::traits::{DeviceTrait, HostTrait};
 use crossterm::{
     event::{self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -13,12 +11,10 @@ use crossterm::{
 };
 use itertools::Itertools;
 use log::info;
+use rpc::basslib::{self, MediaStream};
 use rpc::stream::TrackMetadata;
 // use flexi_logger::{FileSpec, Logger, WriteMode};
-use rpc::{
-    stream::{Current, SourceControl},
-    InputMode, Rpc,
-};
+use rpc::{stream::SourceControl, InputMode, Rpc};
 use tui::widgets::{Cell, Row};
 use tui::{
     backend::{Backend, CrosstermBackend},
@@ -66,44 +62,33 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<()> {
-    rpc.library = rpc::library::load(".library".to_string());
+    BSetConfig(42, 1);
+    BInit(1, 192000, 0, 0);
+    BStart();
     loop {
-        rpc.ui.ui_counter += 1;
-        if rpc.ui.ui_counter >= 100 {
-            rpc.ui.ui_counter = 0;
-            rpc.device = Arc::new(cpal::default_host().default_output_device().unwrap());
-            if let Some(cur) = rpc.current.as_mut() {
-                if cur.streamer.device.name().unwrap() != rpc.device.name().unwrap() {
-                    rpc.current = cur.change_device(rpc.device.clone());
-                }
-            }
-        }
-        if let Some(cur) = rpc.current.as_mut() {
-            if cur.timer.as_secs() > cur.metadata.full_time_secs.unwrap() {
+        // rpc.ui.ui_counter += 1;
+        // if rpc.ui.ui_counter >= 100 {
+        //     rpc.ui.ui_counter = 0;
+        //     rpc.device = Arc::new(cpal::default_host().default_output_device().unwrap());
+        //     if let Some(cur) = rpc.current.as_mut() {
+        //         if cur.streamer.device.name().unwrap() != rpc.device.name().unwrap() {
+        //             rpc.current = cur.change_device(rpc.device.clone());
+        //         }
+        //     }
+        // }
+
+        if let Some(cur) = rpc.current.as_ref() {
+            // TODO вот тут какой-то пиздец творится
+            // когда в паузе скипаешь, опустошает очередь
+            if matches!(BChannelIsActive(cur), channel_state::BASS_ACTIVE_STOPPED) {
                 match rpc.ui.repeat {
                     true => {
-                        rpc.current = Some(Current::new(
-                            rpc.current.unwrap().metadata.path,
-                            rpc.volume.clone(),
-                            rpc.ui.paused,
-                            rpc.device.clone(),
-                        ));
-                        if !rpc.ui.paused {
-                            rpc.current.as_mut().unwrap().timer.start();
-                        }
+                        rpc.current = Some(rpc.new_media_stream(cur.metadata.path.clone()));
                     }
                     false => match rpc.queue.is_empty() {
                         false => {
                             let track_path = rpc.queue.remove(0);
-                            rpc.current = Some(Current::new(
-                                track_path.path,
-                                rpc.volume.clone(),
-                                rpc.ui.paused,
-                                rpc.device.clone(),
-                            ));
-                            if !rpc.ui.paused {
-                                rpc.current.as_mut().unwrap().timer.start();
-                            }
+                            rpc.current = Some(rpc.new_media_stream(track_path.path));
                         }
                         true => rpc.current = None,
                     },
@@ -113,17 +98,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
             match rpc.queue.is_empty() {
                 false => {
                     let track_path = rpc.queue.remove(0);
-                    rpc.current = Some(Current::new(
-                        track_path.path,
-                        rpc.volume.clone(),
-                        rpc.ui.paused,
-                        rpc.device.clone(),
-                    ));
-                    if !rpc.ui.paused {
-                        rpc.current.as_mut().unwrap().timer.start();
-                    }
+                    rpc.current = Some(rpc.new_media_stream(track_path.path));
                 }
-                true => (),
+                true => rpc.current = None,
             }
         }
 
@@ -135,15 +112,16 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                 match rpc.ui.input_state {
                     InputMode::Default => match key.code {
                         KeyCode::Char('q') | KeyCode::Char('й') => {
+                            BFree();
                             return Ok(());
                         }
-                        KeyCode::Char('+') => rpc.set_volume(volume as i8 + 5),
-                        KeyCode::Char('-') => rpc.set_volume(volume as i8 - 5),
+                        KeyCode::Char('+') => rpc.set_volume(volume + 5),
+                        KeyCode::Char('-') => rpc.set_volume(volume - 5),
                         KeyCode::Char('s') | KeyCode::Char('ы') => {
                             if let Some(cur) = &rpc.current {
-                                cur.streamer.control_tx.send(SourceControl::Stop).unwrap();
+                                BChannelStop(cur);
                             }
-                            rpc.current = None;
+                            // rpc.current = None;
                         }
                         KeyCode::Char('a') | KeyCode::Char('ф') => match rpc.ui.add_track {
                             true => {
@@ -162,9 +140,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                                 rpc.ui.paused = false;
                                 match &mut rpc.current {
                                     Some(cur) => {
-                                        cur.streamer.paused = false;
-                                        cur.timer.resume();
-                                        cur.streamer.stream.play().unwrap();
+                                        BChannelPlay(cur, 0);
                                     }
                                     None => (),
                                 }
@@ -173,9 +149,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                                 rpc.ui.paused = true;
                                 match &mut rpc.current {
                                     Some(cur) => {
-                                        cur.streamer.paused = true;
-                                        cur.timer.pause();
-                                        cur.streamer.stream.pause().unwrap();
+                                        BChannelPause(cur);
                                     }
                                     None => (),
                                 }
@@ -183,12 +157,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                         },
                         KeyCode::Right => {
                             if let Some(cur) = &mut rpc.current {
-                                rpc.current = cur.seek_forward(Duration::from_secs(15));
+                                cur.seek_forward(Duration::from_secs(5));
                             }
                         }
                         KeyCode::Left => {
                             if let Some(cur) = &mut rpc.current {
-                                rpc.current = cur.seek_backward(Duration::from_secs(5));
+                                cur.seek_backward(Duration::from_secs(5));
                             }
                         }
                         KeyCode::Tab => match rpc.ui.ui_state {
@@ -204,6 +178,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut rpc: Rpc) -> io::Result<(
                                 true => {
                                     rpc.queue
                                         .push(TrackMetadata::from_str(&track_path).unwrap());
+                                    // {
+                                    //     // TODO переработать
+                                    //     // BFree();
+                                    //     rpc.current = Some(rpc.new_media_stream(track_path));
+                                    // }
                                 }
                                 false => (),
                             }
@@ -267,8 +246,8 @@ fn ui<B: Backend>(f: &mut Frame<B>, rpc: &Rpc) {
         .split(size);
     // let now = rpc.ui.timer.lock().unwrap().now().elapsed_millis() / 1000;
     let now = match &rpc.current {
-        Some(cur) => cur.timer.as_secs(),
-        None => 0,
+        Some(cur) => cur.as_secs(),
+        None => 0.0,
     };
     let cur_full_time = match &rpc.current {
         Some(cur) => cur.metadata.full_time_secs.unwrap(),
@@ -277,8 +256,8 @@ fn ui<B: Backend>(f: &mut Frame<B>, rpc: &Rpc) {
     let msg = format!(
         "cur vol: {}, {}:{:02}/{}:{:02} {}, {}, {}",
         rpc.volume(),
-        now / 60,
-        now % 60,
+        (now / 60.0) as u8,
+        (now % 60.0) as u8,
         cur_full_time / 60,
         cur_full_time % 60,
         match rpc.ui.repeat {
