@@ -200,8 +200,22 @@ impl Drop for MediaStream {
 }
 
 impl MediaStream {
+    pub fn seek_to(&self, dur: Duration) {
+        // let ct = BChannelBytes2Seconds(self, BChannelGetPosition(self, BASS_POS_BYTE));
+        // ct = current time
+        BChannelSetPosition(
+            self,
+            BChannelSeconds2Bytes(
+                self,
+                (dur.as_secs_f64()).clamp(0.0, self.metadata.full_time_secs.unwrap() as f64),
+            ),
+            BASS_POS_BYTE,
+        );
+    }
+
     pub fn seek_backward(&self, dur: Duration) {
         let ct = BChannelBytes2Seconds(self, BChannelGetPosition(self, BASS_POS_BYTE));
+        // ct = current time
         BChannelSetPosition(
             self,
             BChannelSeconds2Bytes(
@@ -214,6 +228,7 @@ impl MediaStream {
 
     pub fn seek_forward(&self, dur: Duration) {
         let ct = BChannelBytes2Seconds(self, BChannelGetPosition(self, BASS_POS_BYTE));
+        // ct = current time
         BChannelSetPosition(
             self,
             BChannelSeconds2Bytes(

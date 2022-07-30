@@ -7,17 +7,13 @@ edition = "2021"
 
 
 [dependencies]
-copypasta = "*"
+eframe = "*"
 libc = "*"
 widestring = "*"
 walkdir = "*"
-# cpal = "*"
-rubato = "*"
-crossterm = "0.23"
 anyhow = "*"
 ringbuf = "0.2.6"
 itertools = "0.10.3"
-tui = {path = "src/tui-rs"}
 # using custom tui-rs version with changes from this fork https://github.com/Phoenix-Chen/tui-rs
 crossbeam = "*"
 symphonia = {version="*", features=["aac", "alac", "mp3", "isomp4"]}

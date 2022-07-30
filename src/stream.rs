@@ -1,16 +1,8 @@
 use anyhow::Error;
-use crossbeam::channel::{self, Receiver, Sender};
-use log::info;
+// use crossbeam::channel::{self, Receiver, Sender};
+// use log::info;
 use serde::{Deserialize, Serialize};
-use std::{
-    str::FromStr,
-    sync::{
-        atomic::{AtomicU8, Ordering},
-        Arc,
-    },
-    thread::JoinHandle,
-    time::Duration,
-};
+use std::str::FromStr;
 
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
@@ -18,8 +10,6 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
 use audiotags::Tag;
-
-use crate::timer::Timer;
 
 pub enum SourceControl {
     None,
