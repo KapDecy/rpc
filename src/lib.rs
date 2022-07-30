@@ -11,7 +11,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eframe::egui;
+use eframe::{egui, emath::Rect};
+use egui_extras::{Size, StripBuilder};
 
 use basslib::{MediaStream, BASS_POS_BYTE};
 use stream::TrackMetadata;
@@ -176,95 +177,260 @@ impl eframe::App for Rpc {
                 }
             }
 
-            let awd = ui.available_width(); // awd = avalible width
-            ui.horizontal(|ui| {
-                // let buttonsymbol = ;
-                let pausebr = ui.add_sized(
-                    [21.0, 20.0],
-                    egui::Button::new(if self.ui.paused { "⏸" } else { "▶" }),
-                );
-                if pausebr.clicked() {
-                    match self.ui.paused {
-                        true => {
-                            self.ui.paused = false;
-                            match &mut self.current {
-                                Some(cur) => {
-                                    BChannelPlay(cur, 0);
+            StripBuilder::new(ui)
+                .size(Size::exact(20.0))
+                .size(Size::initial(5.0).at_least(5.0))
+                .size(Size::remainder())
+                .vertical(|mut strip| {
+                    strip.strip(|strip_builder| {
+                        strip_builder
+                            .size(Size::exact(21.0))
+                            .size(Size::exact(40.0))
+                            .size(Size::remainder().at_least(150.0))
+                            .size(Size::exact(40.0))
+                            .size(Size::exact(80.0))
+                            .size(Size::exact(36.0))
+                            .horizontal(|mut strip| {
+                                // pause button
+                                strip.cell(|ui| {
+                                    let pausebr = ui.add_sized(
+                                        [ui.available_width(), 20.0],
+                                        egui::Button::new(if self.ui.paused {
+                                            "⏸"
+                                        } else {
+                                            "▶"
+                                        }),
+                                    );
+                                    if pausebr.clicked() {
+                                        match self.ui.paused {
+                                            true => {
+                                                self.ui.paused = false;
+                                                match &mut self.current {
+                                                    Some(cur) => {
+                                                        BChannelPlay(cur, 0);
+                                                    }
+                                                    None => (),
+                                                }
+                                            }
+                                            false => {
+                                                self.ui.paused = true;
+                                                match &mut self.current {
+                                                    Some(cur) => {
+                                                        BChannelPause(cur);
+                                                    }
+                                                    None => (),
+                                                }
+                                            }
+                                        }
+                                    }
+                                });
+                                let mut now = match &self.current {
+                                    Some(cur) => cur.as_secs(),
+                                    None => 0.0,
+                                };
+                                let cur_full_time = match &self.current {
+                                    Some(cur) => cur.metadata.full_time_secs.unwrap(),
+                                    None => 0,
+                                };
+                                // curtime label
+                                strip.cell(|ui| {
+                                    ui.add_sized(
+                                        [ui.available_width(), 20.0],
+                                        egui::Label::new(format!(
+                                            "{}:{:02}",
+                                            (now / 60.0) as u8,
+                                            (now % 60.0) as u8
+                                        )),
+                                    );
+                                });
+                                // playback slider
+                                strip.cell(|ui| {
+                                    let oldnow = now;
+                                    ui.style_mut().spacing.slider_width = ui.available_width();
+                                    ui.add_sized(
+                                        [ui.available_width(), 20.0],
+                                        egui::Slider::new(
+                                            &mut now,
+                                            0.0..=(cur_full_time as i64 - 1).max(0) as f64,
+                                        )
+                                        .show_value(false),
+                                    );
+                                    ui.style_mut().spacing.slider_width = 100.0; // default value
+                                    if (-1.0 >= (now - oldnow)) || ((now - oldnow) >= 1.0) {
+                                        self.current
+                                            .as_ref()
+                                            .unwrap()
+                                            .seek_to(Duration::from_secs_f64(now));
+                                    }
+                                });
+                                // fulltime label
+                                strip.cell(|ui| {
+                                    ui.add_sized(
+                                        [ui.available_width(), 20.0],
+                                        egui::Label::new(format!(
+                                            "{}:{:02}",
+                                            cur_full_time / 60,
+                                            cur_full_time % 60
+                                        )),
+                                    );
+                                });
+                                let mut vol = self.volume() as i8;
+                                let oldvol = vol;
+                                let mut rect = Rect::NOTHING;
+                                strip.cell(|ui| {
+                                    ui.style_mut().spacing.slider_width = 80.0;
+                                    rect = rect.union(
+                                        ui.add_sized(
+                                            [80.0, 20.0],
+                                            egui::Slider::new(&mut vol, 0..=100).show_value(false),
+                                        )
+                                        .rect,
+                                    );
+                                    ui.style_mut().spacing.slider_width = 100.0;
+                                    // default value
+                                });
+                                strip.cell(|ui| {
+                                    rect = rect.union(
+                                        ui.add_sized(
+                                            [ui.available_width(), 20.0],
+                                            egui::DragValue::new(&mut vol),
+                                        )
+                                        .rect,
+                                    );
+                                });
+                                let scroll_delta = ctx.input().scroll_delta.y;
+                                let mouse_pos = ctx.pointer_hover_pos();
+                                if let Some(mouse_pos) = mouse_pos {
+                                    if (scroll_delta != 0.0) && rect.contains(mouse_pos) {
+                                        if scroll_delta > 0.0 {
+                                            self.set_volume((self.volume() + 2).clamp(0, 100));
+                                        }
+                                        if scroll_delta < 0.0 {
+                                            self.set_volume(
+                                                (self.volume() as i8 - 2).clamp(0, 100) as u8,
+                                            );
+                                        }
+                                    }
                                 }
-                                None => (),
+                                if (-1 >= (vol - oldvol)) || ((vol - oldvol) >= 1) {
+                                    self.set_volume(vol as u8)
+                                }
+                            });
+                    });
+                    strip.cell(|ui| {
+                        ui.separator();
+                    });
+                    strip.cell(|ui| {
+                        if ui
+                            .add(egui::TextEdit::singleline(&mut self.ui.tmp_add_track))
+                            .lost_focus()
+                        {
+                            match Path::new(self.ui.tmp_add_track.trim_matches('"')).exists() {
+                                true => {
+                                    // self.queue
+                                    //     .push(TrackMetadata::from_str(&self.ui.tmp_add_track).unwrap());
+                                    {
+                                        // TODO переработать
+                                        // BFree();
+                                        self.current = Some(
+                                            self.new_media_stream(self.ui.tmp_add_track.clone()),
+                                        );
+                                        self.ui.tmp_add_track = String::from("");
+                                    }
+                                }
+                                false => (),
                             }
                         }
-                        false => {
-                            self.ui.paused = true;
-                            match &mut self.current {
-                                Some(cur) => {
-                                    BChannelPause(cur);
-                                }
-                                None => (),
-                            }
-                        }
-                    }
-                }
-                let mut now = match &self.current {
-                    Some(cur) => cur.as_secs(),
-                    None => 0.0,
-                };
+                    });
+                });
 
-                let cur_full_time = match &self.current {
-                    Some(cur) => cur.metadata.full_time_secs.unwrap(),
-                    None => 0,
-                };
-                ui.add_sized(
-                    [30.0, 20.0],
-                    egui::Label::new(format!("{}:{:02}", (now / 60.0) as u8, (now % 60.0) as u8)),
-                );
-                let oldnow = now;
-                ui.style_mut().spacing.slider_width = awd - 21.0 - 30.0 - 30.0 - 80.0 - 30.0 - 48.0;
-                // 48 is padding, 6 items, 8 pixels per item
-                ui.add(
-                    egui::Slider::new(&mut now, 0.0..=(cur_full_time as i64 - 1).max(0) as f64)
-                        .show_value(false),
-                );
-                ui.style_mut().spacing.slider_width = 100.0; // default value
-                if (-1.0 >= (now - oldnow)) || ((now - oldnow) >= 1.0) {
-                    self.current
-                        .as_ref()
-                        .unwrap()
-                        .seek_to(Duration::from_secs_f64(now));
-                }
-                ui.add_sized(
-                    [30.0, 20.0],
-                    egui::Label::new(format!("{}:{:02}", cur_full_time / 60, cur_full_time % 60)),
-                );
-                let mut vol = self.volume() as i8;
-                let oldvol = vol;
-                ui.style_mut().spacing.slider_width = 80.0;
-                let volrect = ui
-                    .add(egui::Slider::new(&mut vol, 0..=100).show_value(false))
-                    .rect;
+            // ui.horizontal(|ui| {
+            //     // let buttonsymbol = ;
+            //     let pausebr = ui.add_sized(
+            //         [21.0, 20.0],
+            //         egui::Button::new(if self.ui.paused { "⏸" } else { "▶" }),
+            //     );
+            //     if pausebr.clicked() {
+            //         match self.ui.paused {
+            //             true => {
+            //                 self.ui.paused = false;
+            //                 match &mut self.current {
+            //                     Some(cur) => {
+            //                         BChannelPlay(cur, 0);
+            //                     }
+            //                     None => (),
+            //                 }
+            //             }
+            //             false => {
+            //                 self.ui.paused = true;
+            //                 match &mut self.current {
+            //                     Some(cur) => {
+            //                         BChannelPause(cur);
+            //                     }
+            //                     None => (),
+            //                 }
+            //             }
+            //         }
+            //     }
+            //     let mut now = match &self.current {
+            //         Some(cur) => cur.as_secs(),
+            //         None => 0.0,
+            //     };
+            //     let cur_full_time = match &self.current {
+            //         Some(cur) => cur.metadata.full_time_secs.unwrap(),
+            //         None => 0,
+            //     };
+            //     ui.add_sized(
+            //         [30.0, 20.0],
+            //         egui::Label::new(format!("{}:{:02}", (now / 60.0) as u8, (now % 60.0) as u8)),
+            //     );
+            //     let oldnow = now;
+            //     ui.style_mut().spacing.slider_width = awd - 21.0 - 30.0 - 30.0 - 80.0 - 30.0 - 48.0;
+            //     // 48 is padding, 6 items, 8 pixels per item
+            //     ui.add(
+            //         egui::Slider::new(&mut now, 0.0..=(cur_full_time as i64 - 1).max(0) as f64)
+            //             .show_value(false),
+            //     );
+            //     ui.style_mut().spacing.slider_width = 100.0; // default value
+            //     if (-1.0 >= (now - oldnow)) || ((now - oldnow) >= 1.0) {
+            //         self.current
+            //             .as_ref()
+            //             .unwrap()
+            //             .seek_to(Duration::from_secs_f64(now));
+            //     }
+            //     ui.add_sized(
+            //         [30.0, 20.0],
+            //         egui::Label::new(format!("{}:{:02}", cur_full_time / 60, cur_full_time % 60)),
+            //     );
+            //     let mut vol = self.volume() as i8;
+            //     let oldvol = vol;
+            //     ui.style_mut().spacing.slider_width = 80.0;
+            //     let volrect = ui
+            //         .add(egui::Slider::new(&mut vol, 0..=100).show_value(false))
+            //         .rect;
+            //
+            //     ui.style_mut().spacing.slider_width = 100.0; // default value
+            //     let volrect = volrect.union(
+            //         ui.add_sized([30.0, 20.0], egui::DragValue::new(&mut vol))
+            //             .rect,
+            //     );
+            //     let scroll_delta = ctx.input().scroll_delta.y;
+            //     let mouse_pos = ctx.pointer_hover_pos();
+            //     if let Some(mouse_pos) = mouse_pos {
+            //         if (scroll_delta != 0.0) && volrect.contains(mouse_pos) {
+            //             if scroll_delta > 0.0 {
+            //                 self.set_volume((self.volume() + 2).clamp(0, 100));
+            //             }
+            //             if scroll_delta < 0.0 {
+            //                 self.set_volume((self.volume() as i8 - 2).clamp(0, 100) as u8);
+            //             }
+            //         }
+            //     }
+            //     if (-1 >= (vol - oldvol)) || ((vol - oldvol) >= 1) {
+            //         self.set_volume(vol as u8)
+            //     }
+            // });
 
-                ui.style_mut().spacing.slider_width = 100.0; // default value
-                let volrect = volrect.union(
-                    ui.add_sized([30.0, 20.0], egui::DragValue::new(&mut vol))
-                        .rect,
-                );
-                let scroll_delta = ctx.input().scroll_delta.y;
-                let mouse_pos = ctx.pointer_hover_pos();
-                if let Some(mouse_pos) = mouse_pos {
-                    if (scroll_delta != 0.0) && volrect.contains(mouse_pos) {
-                        if scroll_delta > 0.0 {
-                            self.set_volume((self.volume() + 2).clamp(0, 100));
-                        }
-                        if scroll_delta < 0.0 {
-                            self.set_volume((self.volume() as i8 - 2).clamp(0, 100) as u8);
-                        }
-                    }
-                }
-                if (-1 >= (vol - oldvol)) || ((vol - oldvol) >= 1) {
-                    self.set_volume(vol as u8)
-                }
-            });
-            ui.separator();
             if ui
                 .add(egui::TextEdit::singleline(&mut self.ui.tmp_add_track))
                 .lost_focus()

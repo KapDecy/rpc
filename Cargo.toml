@@ -8,6 +8,7 @@ edition = "2021"
 
 [dependencies]
 eframe = "*"
+egui_extras = "*"
 libc = "*"
 widestring = "*"
 walkdir = "*"
