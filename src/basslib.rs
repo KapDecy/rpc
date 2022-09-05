@@ -80,6 +80,24 @@ extern "C" {
     fn BASS_ChannelSetAttribute(handle: DWORD, attrib: DWORD, value: f32) -> BOOL;
     fn BASS_SetConfig(option: DWORD, value: BOOL) -> DWORD;
     fn BASS_Free() -> BOOL;
+    fn BASS_StreamCreateFile(
+        memory: BOOL,
+        file: *const c_void,
+        offset: QWORD,
+        length: QWORD,
+        flags: DWORD,
+    ) -> HSTREAM;
+}
+
+pub fn BStreamCreateFile(path: String) -> HSTREAM {
+    let s = U16CString::from_str(path).unwrap();
+    bce!(BASS_StreamCreateFile(
+        0,
+        s.into_raw() as _,
+        0,
+        0,
+        BASS_UNICODE | BASS_SAMPLE_FLOAT
+    ))
 }
 
 pub fn BFree() -> bool {
@@ -258,7 +276,7 @@ impl MediaStream {
             .to_string();
         match ext.as_str() {
             "flac" => BFStreamCreateFile(path),
-            "mp3" => todo!(),
+            "mp3" => BStreamCreateFile(path),
             _ => panic!("i don't support this"),
         }
     }

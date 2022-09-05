@@ -1,7 +1,6 @@
 use anyhow::Error;
 // use crossbeam::channel::{self, Receiver, Sender};
 // use log::info;
-use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 use symphonia::core::formats::FormatOptions;
@@ -27,7 +26,7 @@ pub enum SourceControl {
 //     pub device: todo!(),
 // }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct TrackMetadata {
     pub full_time_secs: Option<u64>,
     pub path: String,
