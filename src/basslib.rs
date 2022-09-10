@@ -75,7 +75,6 @@ extern "C" {
     fn BASS_ChannelSeconds2Bytes(handle: DWORD, pos: f64) -> QWORD;
     fn BASS_GetDeviceInfo(device: DWORD, info: *mut BASS_DEVICEINFO) -> BOOL;
     fn BASS_ChannelGetLength(handle: DWORD, mode: DWORD) -> QWORD;
-    // fn BASS_SetVolume(volume: f32) -> BOOL;
     fn BASS_Pause() -> BOOL;
     fn BASS_ChannelSetAttribute(handle: DWORD, attrib: DWORD, value: f32) -> BOOL;
     fn BASS_SetConfig(option: DWORD, value: BOOL) -> DWORD;

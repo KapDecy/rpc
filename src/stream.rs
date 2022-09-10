@@ -15,17 +15,6 @@ pub enum SourceControl {
     Stop,
 }
 
-// pub struct Streamer {
-//     pub stream: todo!(),
-//     pub paused: bool,
-//     pub stream_config: todo!(),
-//     pub source_handler: JoinHandle<()>,
-//     pub volume: Arc<AtomicU8>,
-//     pub sample_tx: Sender<f32>,
-//     pub control_tx: Sender<SourceControl>,
-//     pub device: todo!(),
-// }
-
 #[derive(Debug, Clone)]
 pub struct TrackMetadata {
     pub full_time_secs: Option<u64>,
