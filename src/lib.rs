@@ -5,6 +5,7 @@ pub mod basslib;
 pub mod stream;
 pub mod timer;
 use std::{
+    collections::VecDeque,
     path::Path,
     thread,
     time::{Duration, Instant},
@@ -42,8 +43,8 @@ pub struct Ui {
 pub struct Rpc {
     pub ui: Ui,
     pub current: Option<MediaStream>,
-    pub queue: Vec<TrackMetadata>,
-    pub library: Vec<String>,
+    pub queue: VecDeque<TrackMetadata>,
+    pub library: Vec<TrackMetadata>,
     pub volume: u8,
     pub device: u8,
 }
@@ -63,7 +64,7 @@ impl Rpc {
                 dropped_files: vec![],
             },
             current: None,
-            queue: vec![],
+            queue: VecDeque::from([]),
             library: vec![],
             volume: 20,
             device: 1,
@@ -182,6 +183,7 @@ impl eframe::App for Rpc {
             StripBuilder::new(ui)
                 .size(Size::exact(sth))
                 .size(Size::initial(5.0).at_least(5.0))
+                .size(Size::exact(sth))
                 .size(Size::remainder())
                 .vertical(|mut strip| {
                     strip.strip(|strip_builder| {
@@ -322,28 +324,57 @@ impl eframe::App for Rpc {
                     strip.cell(|ui| {
                         ui.separator();
                     });
+                    if self.current.is_some()
+                        && matches!(
+                            basslib::BChannelIsActive(self.current.as_ref().unwrap()),
+                            basslib::channel_state::BASS_ACTIVE_STOPPED
+                        )
+                    {
+                        self.current = None;
+                    }
                     strip.cell(|ui| {
                         if ui
-                            .add(egui::TextEdit::singleline(&mut self.ui.tmp_add_track))
+                            .add_sized(
+                                ui.available_size(),
+                                egui::TextEdit::singleline(&mut self.ui.tmp_add_track),
+                            )
                             .lost_focus()
                         {
                             match Path::new(self.ui.tmp_add_track.trim_matches('"')).exists() {
                                 true => {
-                                    // self.queue
-                                    //     .push(TrackMetadata::from_str(&self.ui.tmp_add_track).unwrap());
-                                    {
-                                        // TODO переработать
-                                        // BFree();
-                                        self.current = Some(
-                                            self.new_media_stream(self.ui.tmp_add_track.clone()),
-                                        );
-                                        self.ui.tmp_add_track = String::from("");
-                                    }
+                                    self.queue.push_back(
+                                        <TrackMetadata as std::str::FromStr>::from_str(
+                                            &self.ui.tmp_add_track,
+                                        )
+                                        .unwrap(),
+                                    );
+                                    self.ui.tmp_add_track = String::from("");
                                 }
                                 false => (),
                             }
                         }
                     });
+                    strip.cell(|ui| {
+                        // TODO queue view
+                        egui::Grid::new("queue").show(ui, |ui| {
+                            for track in self.queue.iter() {
+                                ui.add(egui::Label::new(track.file_stem.clone()));
+                                ui.end_row();
+                            }
+                        });
+                    });
+
+                    match self.current.is_some() {
+                        true => (),
+                        false => match self.queue.is_empty() {
+                            true => (),
+                            false => {
+                                let file_path = self.queue.pop_front().unwrap().path;
+                                self.current = Some(self.new_media_stream(file_path));
+                                // self.ui.tmp_add_track = String::from("");
+                            }
+                        },
+                    }
 
                     preview_files_being_dropped(ctx);
 
@@ -352,9 +383,15 @@ impl eframe::App for Rpc {
                     }
                     if !self.ui.dropped_files.is_empty() {
                         for file in &self.ui.dropped_files {
-                            self.current = Some(self.new_media_stream(
-                                file.path.as_ref().unwrap().display().to_string(),
-                            ));
+                            // self.current = Some(self.new_media_stream(
+                            //     file.path.as_ref().unwrap().display().to_string(),
+                            // ));
+                            self.queue.push_back(
+                                <TrackMetadata as std::str::FromStr>::from_str(
+                                    &file.path.as_ref().unwrap().display().to_string(),
+                                )
+                                .unwrap(),
+                            );
                         }
                         self.ui.dropped_files = vec![];
                     }
