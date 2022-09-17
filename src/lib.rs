@@ -183,7 +183,7 @@ impl eframe::App for Rpc {
             StripBuilder::new(ui)
                 .size(Size::exact(sth))
                 .size(Size::initial(5.0).at_least(5.0))
-                .size(Size::exact(sth))
+                // .size(Size::exact(sth))
                 .size(Size::remainder())
                 .vertical(|mut strip| {
                     strip.strip(|strip_builder| {
@@ -353,36 +353,51 @@ impl eframe::App for Rpc {
                         self.current = None;
                     }
                     strip.cell(|ui| {
-                        if ui
-                            .add_sized(
-                                ui.available_size(),
-                                egui::TextEdit::singleline(&mut self.ui.tmp_add_track),
-                            )
-                            .lost_focus()
-                        {
-                            match Path::new(self.ui.tmp_add_track.trim_matches('"')).exists() {
-                                true => {
-                                    self.queue.push_back(
-                                        <TrackMetadata as std::str::FromStr>::from_str(
-                                            &self.ui.tmp_add_track,
-                                        )
-                                        .unwrap(),
-                                    );
-                                    self.ui.tmp_add_track = String::from("");
-                                }
-                                false => (),
+                        // TODO вынести коммент в отдельную функцию
+                        // if ui
+                        //     .add_sized(
+                        //         ui.available_size(),
+                        //         egui::TextEdit::singleline(&mut self.ui.tmp_add_track),
+                        //     )
+                        //     .lost_focus()
+                        // {
+                        //     match Path::new(self.ui.tmp_add_track.trim_matches('"')).exists() {
+                        //         true => {
+                        //             self.queue.push_back(
+                        //                 <TrackMetadata as std::str::FromStr>::from_str(
+                        //                     &self.ui.tmp_add_track,
+                        //                 )
+                        //                 .unwrap(),
+                        //             );
+                        //             self.ui.tmp_add_track = String::from("");
+                        //         }
+                        //         false => (),
+                        //     }
+                        // }
+                        match &self.current {
+                            Some(cur) => {
+                                ui.add(egui::Label::new(format!("> {}", cur.metadata.file_stem)));
+                                ui.end_row();
+                                // ui.add_sized(
+                                //     [ui.available_width(), sth],
+                                //     egui::Label::new(format!(">{}", cur.metadata.file_stem)),
+                                // );
                             }
-                        }
-                    });
-                    strip.cell(|ui| {
-                        // TODO queue view
-                        egui::Grid::new("queue").show(ui, |ui| {
-                            for track in self.queue.iter() {
-                                ui.add(egui::Label::new(track.file_stem.clone()));
+                            None => {
+                                ui.add(egui::Label::new("> None"));
                                 ui.end_row();
                             }
-                        });
+                        }
+                        for track in self.queue.iter() {
+                            ui.add(egui::Label::new(track.file_stem.clone()));
+                            ui.end_row();
+                        }
                     });
+                    // strip.cell(|ui| {
+                    //     // TODO queue view
+                    //     egui::Grid::new("queue").show(ui, |ui| {
+                    //     });
+                    // });
 
                     match self.current.is_some() {
                         true => (),
