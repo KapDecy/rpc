@@ -189,6 +189,7 @@ impl eframe::App for Rpc {
                     strip.strip(|strip_builder| {
                         strip_builder
                             .size(Size::exact(21.0))
+                            .size(Size::exact(21.0))
                             .size(Size::exact(40.0))
                             .size(Size::remainder().at_least(150.0))
                             .size(Size::exact(40.0))
@@ -224,6 +225,25 @@ impl eframe::App for Rpc {
                                                     }
                                                     None => (),
                                                 }
+                                            }
+                                        }
+                                    }
+                                });
+                                strip.cell(|ui| {
+                                    let nextbr = ui.add_sized(
+                                        [ui.available_width(), sth],
+                                        egui::Button::new("⏭"),
+                                    );
+                                    if nextbr.clicked() {
+                                        self.current = None;
+                                        match self.queue.is_empty() {
+                                            true => (),
+                                            false => {
+                                                let file_path =
+                                                    self.queue.pop_front().unwrap().path;
+                                                self.current =
+                                                    Some(self.new_media_stream(file_path));
+                                                // self.ui.tmp_add_track = String::from("");
                                             }
                                         }
                                     }
@@ -382,16 +402,33 @@ impl eframe::App for Rpc {
                         self.ui.dropped_files = ctx.input().raw.dropped_files.clone();
                     }
                     if !self.ui.dropped_files.is_empty() {
+                        self.ui.dropped_files.reverse();
                         for file in &self.ui.dropped_files {
                             // self.current = Some(self.new_media_stream(
                             //     file.path.as_ref().unwrap().display().to_string(),
                             // ));
-                            self.queue.push_back(
-                                <TrackMetadata as std::str::FromStr>::from_str(
-                                    &file.path.as_ref().unwrap().display().to_string(),
-                                )
-                                .unwrap(),
-                            );
+                            if file
+                                .path
+                                .as_ref()
+                                .unwrap()
+                                .display()
+                                .to_string()
+                                .ends_with(".flac")
+                                || file
+                                    .path
+                                    .as_ref()
+                                    .unwrap()
+                                    .display()
+                                    .to_string()
+                                    .ends_with(".mp3")
+                            {
+                                self.queue.push_back(
+                                    <TrackMetadata as std::str::FromStr>::from_str(
+                                        &file.path.as_ref().unwrap().display().to_string(),
+                                    )
+                                    .unwrap(),
+                                );
+                            }
                         }
                         self.ui.dropped_files = vec![];
                     }
