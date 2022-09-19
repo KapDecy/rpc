@@ -15,6 +15,7 @@ use eframe::{egui, emath::Rect};
 use egui_extras::{Size, StripBuilder};
 
 use basslib::{MediaStream, BASS_POS_BYTE};
+use itertools::enumerate;
 use stream::TrackMetadata;
 
 use basslib::*;
@@ -40,10 +41,30 @@ pub struct Ui {
     pub dropped_files: Vec<egui::DroppedFile>,
 }
 
+enum Pointer {
+    Start,
+    Idx(usize),
+    End,
+}
+
+pub struct Queue {
+    qu_vec: Vec<TrackMetadata>,
+    pointer: Pointer,
+}
+
+impl Default for Queue {
+    fn default() -> Self {
+        Self {
+            qu_vec: Vec::from([]),
+            pointer: Pointer::Start,
+        }
+    }
+}
+
 pub struct Rpc {
     pub ui: Ui,
     pub current: Option<MediaStream>,
-    pub queue: VecDeque<TrackMetadata>,
+    pub queue: Queue,
     pub library: Vec<TrackMetadata>,
     pub volume: u8,
     pub device: u8,
@@ -64,7 +85,7 @@ impl Rpc {
                 dropped_files: vec![],
             },
             current: None,
-            queue: VecDeque::from([]),
+            queue: Queue::default(),
             library: vec![],
             volume: 20,
             device: 1,
@@ -198,7 +219,7 @@ impl eframe::App for Rpc {
                             .horizontal(|mut strip| {
                                 // pause button
                                 strip.cell(|ui| {
-                                    let pausebr = ui.add_sized(
+                                    let pausebn = ui.add_sized(
                                         [ui.available_width(), sth],
                                         egui::Button::new(if self.ui.paused {
                                             "▶"
@@ -206,7 +227,7 @@ impl eframe::App for Rpc {
                                             "⏸"
                                         }),
                                     );
-                                    if pausebr.clicked() {
+                                    if pausebn.clicked() {
                                         match self.ui.paused {
                                             true => {
                                                 self.ui.paused = false;
@@ -230,21 +251,50 @@ impl eframe::App for Rpc {
                                     }
                                 });
                                 strip.cell(|ui| {
-                                    let nextbr = ui.add_sized(
+                                    let nextbn = ui.add_sized(
                                         [ui.available_width(), sth],
                                         egui::Button::new("⏭"),
                                     );
-                                    if nextbr.clicked() {
-                                        self.current = None;
-                                        match self.queue.is_empty() {
+                                    if nextbn.clicked() {
+                                        match self.queue.qu_vec.is_empty() {
                                             true => (),
-                                            false => {
-                                                let file_path =
-                                                    self.queue.pop_front().unwrap().path;
-                                                self.current =
-                                                    Some(self.new_media_stream(file_path));
-                                                // self.ui.tmp_add_track = String::from("");
-                                            }
+                                            false => match &mut self.queue.pointer {
+                                                Pointer::Start => {
+                                                    self.current = None;
+                                                    self.queue.pointer = Pointer::Idx(0);
+                                                    if (self.queue.qu_vec.len() - 1) > 0 {
+                                                        let file_path = &self.queue.qu_vec[0].path;
+                                                        self.current = Some(self.new_media_stream(
+                                                            file_path.to_string(),
+                                                        ));
+                                                    }
+                                                }
+                                                Pointer::Idx(idx) => {
+                                                    self.current = None;
+                                                    if (self.queue.qu_vec.len() - 1) >= (*idx + 1) {
+                                                        *idx += 1;
+                                                        let file_path =
+                                                            &self.queue.qu_vec[*idx].path;
+                                                        self.current = Some(self.new_media_stream(
+                                                            file_path.to_string(),
+                                                        ));
+                                                    } else {
+                                                        self.queue.pointer = Pointer::End;
+                                                    }
+                                                }
+                                                Pointer::End => {
+                                                    // self.current = None;
+                                                    // self.queue.pointer = Pointer::Idx(0);
+                                                    // if (self.queue.qu_vec.len() - 1) > 0 {
+                                                    //     let file_path = &self.queue.qu_vec[0].path;
+                                                    //     self.current = Some(self.new_media_stream(
+                                                    //         file_path.to_string(),
+                                                    //     ));
+                                                    // } else {
+                                                    self.queue.pointer = Pointer::Start;
+                                                    // }
+                                                }
+                                            },
                                         }
                                     }
                                 });
@@ -374,40 +424,52 @@ impl eframe::App for Rpc {
                         //         false => (),
                         //     }
                         // }
-                        match &self.current {
-                            Some(cur) => {
-                                ui.add(egui::Label::new(format!("> {}", cur.metadata.file_stem)));
-                                ui.end_row();
-                                // ui.add_sized(
-                                //     [ui.available_width(), sth],
-                                //     egui::Label::new(format!(">{}", cur.metadata.file_stem)),
-                                // );
+
+                        for (idx, track) in enumerate(&self.queue.qu_vec) {
+                            if let Pointer::Idx(pidx) = self.queue.pointer && idx == pidx {
+                                ui.add(egui::Label::new(format!(">{}", track.file_stem.clone())));
+                            } else {
+                                ui.add(egui::Label::new(track.file_stem.clone()));
                             }
-                            None => {
-                                ui.add(egui::Label::new("> None"));
-                                ui.end_row();
-                            }
-                        }
-                        for track in self.queue.iter() {
-                            ui.add(egui::Label::new(track.file_stem.clone()));
                             ui.end_row();
                         }
                     });
-                    // strip.cell(|ui| {
-                    //     // TODO queue view
-                    //     egui::Grid::new("queue").show(ui, |ui| {
-                    //     });
-                    // });
 
                     match self.current.is_some() {
                         true => (),
-                        false => match self.queue.is_empty() {
+                        false => match self.queue.qu_vec.is_empty() {
                             true => (),
-                            false => {
-                                let file_path = self.queue.pop_front().unwrap().path;
-                                self.current = Some(self.new_media_stream(file_path));
-                                // self.ui.tmp_add_track = String::from("");
-                            }
+                            false => match &mut self.queue.pointer {
+                                Pointer::Start => {
+                                    self.current = None;
+                                    self.queue.pointer = Pointer::Idx(0);
+                                    if (self.queue.qu_vec.len() - 1) > 0 {
+                                        let file_path = &self.queue.qu_vec[0].path;
+                                        self.current =
+                                            Some(self.new_media_stream(file_path.to_string()));
+                                    }
+                                }
+                                Pointer::Idx(idx) => {
+                                    self.current = None;
+                                    if (self.queue.qu_vec.len() - 1) >= (*idx + 1) {
+                                        *idx += 1;
+                                        let file_path = &self.queue.qu_vec[*idx].path;
+                                        self.current =
+                                            Some(self.new_media_stream(file_path.to_string()));
+                                    } else {
+                                        // self.queue.pointer = Pointer::End;
+                                    }
+                                }
+                                Pointer::End => {
+                                    self.current = None;
+                                    self.queue.pointer = Pointer::Idx(0);
+                                    if (self.queue.qu_vec.len() - 1) > 0 {
+                                        let file_path = &self.queue.qu_vec[0].path;
+                                        self.current =
+                                            Some(self.new_media_stream(file_path.to_string()));
+                                    }
+                                }
+                            },
                         },
                     }
 
@@ -417,7 +479,7 @@ impl eframe::App for Rpc {
                         self.ui.dropped_files = ctx.input().raw.dropped_files.clone();
                     }
                     if !self.ui.dropped_files.is_empty() {
-                        self.ui.dropped_files.reverse();
+                        // self.ui.dropped_files.reverse();
                         for file in &self.ui.dropped_files {
                             // self.current = Some(self.new_media_stream(
                             //     file.path.as_ref().unwrap().display().to_string(),
@@ -437,7 +499,7 @@ impl eframe::App for Rpc {
                                     .to_string()
                                     .ends_with(".mp3")
                             {
-                                self.queue.push_back(
+                                self.queue.qu_vec.push(
                                     <TrackMetadata as std::str::FromStr>::from_str(
                                         &file.path.as_ref().unwrap().display().to_string(),
                                     )
