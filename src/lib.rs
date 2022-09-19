@@ -443,11 +443,9 @@ impl eframe::App for Rpc {
                                 Pointer::Start => {
                                     self.current = None;
                                     self.queue.pointer = Pointer::Idx(0);
-                                    if (self.queue.qu_vec.len() - 1) > 0 {
-                                        let file_path = &self.queue.qu_vec[0].path;
-                                        self.current =
-                                            Some(self.new_media_stream(file_path.to_string()));
-                                    }
+                                    let file_path = &self.queue.qu_vec[0].path;
+                                    self.current =
+                                        Some(self.new_media_stream(file_path.to_string()));
                                 }
                                 Pointer::Idx(idx) => {
                                     self.current = None;
@@ -461,13 +459,13 @@ impl eframe::App for Rpc {
                                     }
                                 }
                                 Pointer::End => {
-                                    self.current = None;
-                                    self.queue.pointer = Pointer::Idx(0);
-                                    if (self.queue.qu_vec.len() - 1) > 0 {
-                                        let file_path = &self.queue.qu_vec[0].path;
-                                        self.current =
-                                            Some(self.new_media_stream(file_path.to_string()));
-                                    }
+                                    // self.current = None;
+                                    // self.queue.pointer = Pointer::Idx(0);
+                                    // if (self.queue.qu_vec.len() - 1) > 0 {
+                                    //     let file_path = &self.queue.qu_vec[0].path;
+                                    //     self.current =
+                                    //         Some(self.new_media_stream(file_path.to_string()));
+                                    // }
                                 }
                             },
                         },
