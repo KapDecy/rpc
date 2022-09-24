@@ -4,7 +4,7 @@ use rpc::Rpc;
 
 fn main() -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
-        min_window_size: Some([800.0, 600.0].into()),
+        min_window_size: Some([1000.0, 700.0].into()),
         drag_and_drop_support: true,
         ..Default::default()
     };

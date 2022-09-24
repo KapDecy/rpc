@@ -5,14 +5,14 @@ pub mod basslib;
 pub mod stream;
 pub mod timer;
 use std::{
-    collections::VecDeque,
+    fs,
     path::Path,
     thread,
     time::{Duration, Instant},
 };
 
 use eframe::{egui, emath::Rect};
-use egui_extras::{Size, StripBuilder};
+use egui_extras::{RetainedImage, Size, StripBuilder};
 
 use basslib::{MediaStream, BASS_POS_BYTE};
 use itertools::enumerate;
@@ -39,6 +39,7 @@ pub struct Ui {
     pub cursor: u16,
     pub tmp_add_track: String,
     pub dropped_files: Vec<egui::DroppedFile>,
+    pub no_lyrics_image: Option<RetainedImage>,
 }
 
 enum Pointer {
@@ -83,6 +84,7 @@ impl Rpc {
                 cursor: 0,
                 tmp_add_track: String::from(""),
                 dropped_files: vec![],
+                no_lyrics_image: None,
             },
             current: None,
             queue: Queue::default(),
@@ -90,6 +92,8 @@ impl Rpc {
             volume: 20,
             device: 1,
         };
+
+        // r.ui.no_lyrics_image = Some(RetainedImage::from);
 
         BSetConfig(42, 1);
         BInit(1, 192000, 0, 0);
@@ -138,6 +142,31 @@ impl Default for Rpc {
 impl eframe::App for Rpc {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let tsp = Instant::now(); // tsp = time start point
+        match &self.current {
+            Some(cur) => {
+                let lpath = cur.metadata.path.replace(".flac", ".lrc");
+                let lpath = Path::new(&lpath);
+                match lpath.exists() {
+                    true => {
+                        let mut lyrics = fs::read_to_string(lpath).unwrap();
+                        egui::SidePanel::right("lyrics")
+                            .min_width(300.0)
+                            .resizable(false)
+                            .show(ctx, |ui| {
+                                egui::containers::ScrollArea::vertical().show(ui, |ui| {
+                                    ui.add(
+                                        egui::widgets::TextEdit::multiline(&mut lyrics)
+                                            .interactive(false),
+                                    );
+                                });
+                            });
+                    }
+                    false => (),
+                }
+            }
+            None => (),
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
             if !ctx.wants_keyboard_input() {
                 let inp = &ctx.input().events;
@@ -496,6 +525,13 @@ impl eframe::App for Rpc {
                                     .display()
                                     .to_string()
                                     .ends_with(".mp3")
+                                || file
+                                    .path
+                                    .as_ref()
+                                    .unwrap()
+                                    .display()
+                                    .to_string()
+                                    .ends_with(".m4a")
                             {
                                 self.queue.qu_vec.push(
                                     <TrackMetadata as std::str::FromStr>::from_str(
@@ -509,6 +545,7 @@ impl eframe::App for Rpc {
                     }
                 });
         });
+
         let tbrp = 1.0 / 100.0; // tbrp = time before repaint
         if tsp.elapsed().as_secs_f64() < tbrp {
             thread::sleep(Duration::from_secs_f64(tbrp - tsp.elapsed().as_secs_f64()));
