@@ -11,8 +11,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eframe::{egui, emath::Rect};
-use egui_extras::{RetainedImage, Size, StripBuilder};
+use eframe::{
+    egui::{self},
+    emath::Rect,
+    epaint::ColorImage,
+};
+use egui_extras::{Size, StripBuilder};
 
 use basslib::{MediaStream, BASS_POS_BYTE};
 use itertools::enumerate;
@@ -39,7 +43,8 @@ pub struct Ui {
     pub cursor: u16,
     pub tmp_add_track: String,
     pub dropped_files: Vec<egui::DroppedFile>,
-    pub no_lyrics_image: Option<RetainedImage>,
+    pub no_lyrics_color_image: Option<ColorImage>,
+    pub no_lyrics_texture_handle: Option<egui::TextureHandle>,
 }
 
 enum Pointer {
@@ -73,7 +78,10 @@ pub struct Rpc {
 
 impl Rpc {
     pub fn new() -> Self {
-        let r = Rpc {
+        BSetConfig(42, 1);
+        BInit(1, 192000, 0, 0);
+        BStart();
+        Rpc {
             ui: Ui {
                 repeat: false,
                 ui_counter: 0,
@@ -84,22 +92,15 @@ impl Rpc {
                 cursor: 0,
                 tmp_add_track: String::from(""),
                 dropped_files: vec![],
-                no_lyrics_image: None,
+                no_lyrics_color_image: None,
+                no_lyrics_texture_handle: None,
             },
             current: None,
             queue: Queue::default(),
             library: vec![],
             volume: 20,
             device: 1,
-        };
-
-        // r.ui.no_lyrics_image = Some(RetainedImage::from);
-
-        BSetConfig(42, 1);
-        BInit(1, 192000, 0, 0);
-        BStart();
-
-        r
+        }
     }
 
     pub fn volume(&self) -> u8 {
@@ -141,6 +142,18 @@ impl Default for Rpc {
 
 impl eframe::App for Rpc {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.ui.no_lyrics_color_image.is_none() {
+            let image = image::io::Reader::open("src/no_lyrics.png")
+                .unwrap()
+                .decode()
+                .unwrap();
+            let size = [image.width() as _, image.height() as _];
+            let image_buffer = image.to_rgba8();
+            let pixels = image_buffer.as_flat_samples();
+            let color_image = egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice());
+
+            self.ui.no_lyrics_color_image = Some(color_image);
+        }
         let tsp = Instant::now(); // tsp = time start point
         match &self.current {
             Some(cur) => {
@@ -154,14 +167,36 @@ impl eframe::App for Rpc {
                             .resizable(false)
                             .show(ctx, |ui| {
                                 egui::containers::ScrollArea::vertical().show(ui, |ui| {
-                                    ui.add(
+                                    ui.add_sized(
+                                        [ui.available_width(), ui.available_height()],
                                         egui::widgets::TextEdit::multiline(&mut lyrics)
                                             .interactive(false),
                                     );
                                 });
                             });
                     }
-                    false => (),
+                    false => {
+                        egui::SidePanel::right("lyrics")
+                            .min_width(150.0)
+                            .resizable(false)
+                            .show(ctx, |ui| {
+                                // let (size, texture) = self.ui.no_lyrics_image.unwrap();
+                                let color_image = self.ui.no_lyrics_color_image.clone().unwrap();
+                                let texture: &egui::TextureHandle =
+                                    self.ui.no_lyrics_texture_handle.get_or_insert_with(|| {
+                                        ui.ctx().load_texture(
+                                            "no_lyrics",
+                                            color_image,
+                                            egui::TextureFilter::Linear,
+                                        )
+                                    });
+                                // ui.image(texture, texture.size_vec2());
+                                // let size = texture.size();
+                                // let fsize = [(size[0] / 2) as f32, (size[1] / 2) as f32];
+                                let fsize = ui.available_size();
+                                ui.add_sized(fsize, egui::widgets::Image::new(texture, fsize));
+                            });
+                    }
                 }
             }
             None => (),
@@ -555,11 +590,7 @@ impl eframe::App for Rpc {
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {}
 
-    fn on_exit_event(&mut self) -> bool {
-        true
-    }
-
-    fn on_exit(&mut self, _gl: &eframe::glow::Context) {}
+    fn on_exit(&mut self, _gl: std::option::Option<&eframe::glow::Context>) {}
 
     fn auto_save_interval(&self) -> Duration {
         Duration::from_secs(30)
@@ -589,6 +620,12 @@ impl eframe::App for Rpc {
     fn warm_up_enabled(&self) -> bool {
         false
     }
+
+    fn on_close_event(&mut self) -> bool {
+        true
+    }
+
+    fn post_rendering(&mut self, _window_size_px: [u32; 2], _frame: &eframe::Frame) {}
 
     // fn post_rendering(&mut self, _window_size_px: [u32; 2], _frame: &eframe::Frame) {}3
 }
