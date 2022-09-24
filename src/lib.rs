@@ -506,7 +506,7 @@ impl eframe::App for Rpc {
                         self.ui.dropped_files = ctx.input().raw.dropped_files.clone();
                     }
                     if !self.ui.dropped_files.is_empty() {
-                        // self.ui.dropped_files.reverse();
+                        self.ui.dropped_files.reverse();
                         for file in &self.ui.dropped_files {
                             // self.current = Some(self.new_media_stream(
                             //     file.path.as_ref().unwrap().display().to_string(),
