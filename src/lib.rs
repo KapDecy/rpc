@@ -1,6 +1,7 @@
 #![feature(cell_update)]
 #![feature(duration_constants)]
 #![feature(thread_id_value)]
+#![feature(let_chains)]
 pub mod basslib;
 pub mod stream;
 pub mod timer;
