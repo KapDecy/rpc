@@ -1,16 +1,17 @@
 use std::{
-    cell::RefCell,
-    rc::{Rc, Weak},
     str::FromStr,
+    sync::{Arc, Mutex, Weak},
 };
 
 use crate::stream::TrackMetadata;
 
+use rayon::prelude::*;
+
 #[derive(Debug, Default)]
 pub struct Node {
-    pub parant: Option<Weak<RefCell<Node>>>,
+    pub parant: Option<Weak<Mutex<Node>>>,
     pub mvec: Vec<TrackMetadata>,
-    pub nvec: Vec<Rc<RefCell<Node>>>,
+    pub nvec: Vec<Arc<Mutex<Node>>>,
     pub name: String,
 }
 
@@ -24,7 +25,7 @@ impl Node {
         }
     }
 
-    pub fn from_path(path: String, parent: Option<Weak<RefCell<Node>>>) -> Rc<RefCell<Node>> {
+    pub fn from_path(path: String, parent: Option<Weak<Mutex<Node>>>) -> Arc<Mutex<Node>> {
         use walkdir::WalkDir;
 
         let mut node = Node::default();
@@ -33,43 +34,47 @@ impl Node {
         if parent.is_some() {
             node.parant = parent;
         }
-        let rcnode = Rc::new(RefCell::new(node));
+        let rcnode = Arc::new(Mutex::new(node));
 
-        for entry in WalkDir::new(path)
+        let _v: Vec<_> = WalkDir::new(path)
             .max_depth(1)
             .into_iter()
             .filter_map(|e| e.ok())
             .skip(1)
-        {
-            match entry.metadata().unwrap().is_file() {
-                true => {
-                    // println!(
-                    //     "{} added to {}",
-                    //     entry.path().to_string_lossy(),
-                    //     name.clone()
-                    // );
-                    match entry.path().extension().unwrap().to_str().unwrap() {
-                        "flac" => {
-                            rcnode.borrow_mut().mvec.push(
-                                TrackMetadata::from_str(entry.path().to_str().unwrap()).unwrap(),
-                            );
+            .par_bridge()
+            .map(|entry| {
+                match entry.metadata().unwrap().is_file() {
+                    true => {
+                        // println!(
+                        //     "{} added to {}",
+                        //     entry.path().to_string_lossy(),
+                        //     name.clone()
+                        // );
+                        match entry.path().extension().unwrap().to_str().unwrap() {
+                            "flac" => {
+                                rcnode.lock().unwrap().mvec.push(
+                                    TrackMetadata::from_str(entry.path().to_str().unwrap())
+                                        .unwrap(),
+                                );
+                            }
+                            "mp3" => {
+                                rcnode.lock().unwrap().mvec.push(
+                                    TrackMetadata::from_str(entry.path().to_str().unwrap())
+                                        .unwrap(),
+                                );
+                            }
+                            _ => {}
                         }
-                        "mp3" => {
-                            rcnode.borrow_mut().mvec.push(
-                                TrackMetadata::from_str(entry.path().to_str().unwrap()).unwrap(),
-                            );
-                        }
-                        _ => {}
+                    }
+                    false => {
+                        rcnode.lock().unwrap().nvec.push(Node::from_path(
+                            entry.path().to_str().unwrap().to_string(),
+                            Some(Arc::downgrade(&rcnode)),
+                        ));
                     }
                 }
-                false => {
-                    rcnode.borrow_mut().nvec.push(Node::from_path(
-                        entry.path().to_str().unwrap().to_string(),
-                        Some(Rc::downgrade(&rcnode)),
-                    ));
-                }
-            }
-        }
+            })
+            .collect();
 
         rcnode
     }

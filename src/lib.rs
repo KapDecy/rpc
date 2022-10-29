@@ -12,7 +12,7 @@ use std::{
     path::Path,
     rc::Rc,
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant}, sync::{Arc, Mutex},
 };
 
 use eframe::{
@@ -43,7 +43,7 @@ pub struct Ui {
     pub ui_counter: u32,
     pub input_state: InputMode,
     pub ui_state: UiState,
-    pub lib_pointer: Option<Rc<RefCell<Node>>>,
+    pub lib_pointer: Option<Arc<Mutex<Node>>>,
     pub add_track: bool,
     pub paused: bool,
     pub cursor: u16,
@@ -77,7 +77,7 @@ pub struct Rpc {
     pub ui: Ui,
     pub current: Option<MediaStream>,
     pub queue: Queue,
-    pub library: Option<Rc<RefCell<Node>>>,
+    pub library: Option<Arc<Mutex<Node>>>,
     pub volume: u8,
     pub device: u8,
 }
@@ -87,7 +87,7 @@ impl Rpc {
         BSetConfig(42, 1);
         BInit(1, 192000, 0, 0);
         BStart();
-        let mut lib: Option<std::rc::Rc<std::cell::RefCell<library::Node>>> = None;
+        let mut lib: Option<Arc<Mutex<Node>>> = None;
         // временная заглушка
         let temp_lib_path = r"D:\From Torrent\Музыка";
         if Path::new(temp_lib_path).exists() {
@@ -518,10 +518,10 @@ impl eframe::App for Rpc {
                             UiState::Library => {
                                 match self.library {
                                     Some(_) => {
-                                        let mut cd: Option<Rc<RefCell<Node>>> = None;
+                                        let mut cd: Option<Arc<Mutex<Node>>> = None;
                                         egui::containers::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
                                             {
-                                                let node = self.ui.lib_pointer.as_ref().unwrap().borrow();
+                                                let node = self.ui.lib_pointer.as_ref().unwrap().lock().unwrap();
                                                 if node.parant.is_some() {
                                                     let button = egui::Button::new("..");
                                                     // TODO change lib_pointer position
@@ -529,15 +529,19 @@ impl eframe::App for Rpc {
                                                         cd = node.parant.as_ref().unwrap().clone().upgrade();
                                                     };
                                                 }
-                                                for dir in &node.nvec {
-                                                    let bdir = dir.borrow();
+                                                let mut nvec = node.nvec.clone();
+                                                nvec.sort_by_key(|x| x.lock().unwrap().name.clone());
+                                                for dir in nvec {
+                                                    let bdir = dir.lock().unwrap();
                                                     let button = egui::Button::new(bdir.name.clone());
                                                     if ui.add(button).clicked() {
                                                         cd = Some(dir.clone());
                                                     };
                                                     // TODO change lib_pointer position
                                                 }
-                                                for media in &node.mvec {
+                                                let mut mvec = node.mvec.clone();
+                                                mvec.sort_by_key(|x| x.file_stem.clone());
+                                                for media in mvec {
                                                     let button = egui::Button::new(media.file_stem.clone());
                                                     if ui.add(button).clicked() {
                                                         self.current = Some(self.new_media_stream(media.path.to_string()));
@@ -641,7 +645,7 @@ impl eframe::App for Rpc {
                 });
         });
 
-        let tbrp = 1.0 / 100.0; // tbrp = time before repaint
+        let tbrp = 1.0 / 200.0; // tbrp = time before repaint
         if tsp.elapsed().as_secs_f64() < tbrp {
             thread::sleep(Duration::from_secs_f64(tbrp - tsp.elapsed().as_secs_f64()));
         }
