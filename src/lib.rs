@@ -3,11 +3,14 @@
 #![feature(thread_id_value)]
 #![feature(let_chains)]
 pub mod basslib;
+pub mod library;
 pub mod stream;
 pub mod timer;
 use std::{
+    cell::RefCell,
     fs,
     path::Path,
+    rc::Rc,
     thread,
     time::{Duration, Instant},
 };
@@ -21,6 +24,7 @@ use egui_extras::{Size, StripBuilder};
 
 use basslib::{MediaStream, BASS_POS_BYTE};
 use itertools::enumerate;
+use library::Node;
 use stream::TrackMetadata;
 
 use basslib::*;
@@ -39,6 +43,7 @@ pub struct Ui {
     pub ui_counter: u32,
     pub input_state: InputMode,
     pub ui_state: UiState,
+    pub lib_pointer: Option<Rc<RefCell<Node>>>,
     pub add_track: bool,
     pub paused: bool,
     pub cursor: u16,
@@ -72,7 +77,7 @@ pub struct Rpc {
     pub ui: Ui,
     pub current: Option<MediaStream>,
     pub queue: Queue,
-    pub library: Vec<TrackMetadata>,
+    pub library: Option<Rc<RefCell<Node>>>,
     pub volume: u8,
     pub device: u8,
 }
@@ -82,12 +87,18 @@ impl Rpc {
         BSetConfig(42, 1);
         BInit(1, 192000, 0, 0);
         BStart();
+        let mut lib: Option<std::rc::Rc<std::cell::RefCell<library::Node>>> = None;
+        // TODO переполняет стак
+        // временная заглушка
+        if Path::new(r"D:\From Torrent\Музыка\ooes - Дискография - 2020-2021 [FLAC]").exists() {
+            lib = Some(Node::from_path(r"D:\From Torrent\Музыка\ooes - Дискография - 2020-2021 [FLAC]".to_string(), None));
+        }
         Rpc {
             ui: Ui {
                 repeat: false,
                 ui_counter: 0,
                 input_state: InputMode::Default,
-                ui_state: UiState::Queue,
+                ui_state: UiState::Library,
                 add_track: false,
                 paused: false,
                 cursor: 0,
@@ -95,10 +106,11 @@ impl Rpc {
                 dropped_files: vec![],
                 no_lyrics_color_image: None,
                 no_lyrics_texture_handle: None,
+                lib_pointer: lib.clone(),
             },
             current: None,
             queue: Queue::default(),
-            library: vec![],
+            library: lib,
             volume: 20,
             device: 1,
         }
@@ -489,15 +501,48 @@ impl eframe::App for Rpc {
                         //         false => (),
                         //     }
                         // }
+                        
 
-                        for (idx, track) in enumerate(&self.queue.qu_vec) {
-                            if let Pointer::Idx(pidx) = self.queue.pointer && idx == pidx {
-                                ui.add(egui::Label::new(format!(">{}", track.file_stem.clone())));
-                            } else {
-                                ui.add(egui::Label::new(track.file_stem.clone()));
-                            }
-                            ui.end_row();
+                        match self.ui.ui_state {
+                            UiState::Queue => {
+                                for (idx, track) in enumerate(&self.queue.qu_vec) {
+                                    if let Pointer::Idx(pidx) = self.queue.pointer && idx == pidx {
+                                        ui.add(egui::Label::new(format!(">{}", track.file_stem.clone())));
+                                    } else {
+                                        ui.add(egui::Label::new(track.file_stem.clone()));
+                                    }
+                                    ui.end_row();
+                                }
+                            },
+                            UiState::Library => {
+                                match self.library {
+                                    Some(_) => {
+                                        let node = self.ui.lib_pointer.as_ref().unwrap().borrow();
+                                        if node.parant.is_some() {
+                                            let button = egui::Button::new("..");
+                                            // todo!("change lib_pointer position");
+                                            // TODO change lib_pointer position
+                                            ui.add(button);
+                                        }
+                                        for dir in &node.nvec {
+                                            let bdir = dir.borrow();
+                                            let button = egui::Button::new(bdir.name.clone());
+                                            ui.add(button);
+                                            // TODO change lib_pointer position
+                                        }
+                                        for media in &node.mvec {
+                                            let button = egui::Button::new(media.file_stem.clone());
+                                            // TODO play track by click
+                                            ui.add(button);
+                                        }
+                                        }
+                                    None => {
+                                        ui.add(egui::Label::new("No library data avalible"));
+                                    },
+                                }},
                         }
+
+
                     });
 
                     match self.current.is_some() {
