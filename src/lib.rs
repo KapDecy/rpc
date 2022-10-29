@@ -171,6 +171,7 @@ impl eframe::App for Rpc {
         match &self.current {
             Some(cur) => {
                 let lpath = cur.metadata.path.replace(".flac", ".lrc");
+                let lpath = lpath.replace(".mp3", ".lrc");
                 let lpath = Path::new(&lpath);
                 match lpath.exists() {
                     true => {
