@@ -88,10 +88,10 @@ impl Rpc {
         BInit(1, 192000, 0, 0);
         BStart();
         let mut lib: Option<std::rc::Rc<std::cell::RefCell<library::Node>>> = None;
-        // TODO переполняет стак
         // временная заглушка
-        if Path::new(r"D:\From Torrent\Музыка\ooes - Дискография - 2020-2021 [FLAC]").exists() {
-            lib = Some(Node::from_path(r"D:\From Torrent\Музыка\ooes - Дискография - 2020-2021 [FLAC]".to_string(), None));
+        let temp_lib_path = r"D:\From Torrent\Музыка\Jack Stauber";
+        if Path::new(temp_lib_path).exists() {
+            lib = Some(Node::from_path(temp_lib_path.to_string(), None));
         }
         Rpc {
             ui: Ui {
@@ -191,6 +191,7 @@ impl eframe::App for Rpc {
                     false => {
                         egui::SidePanel::right("lyrics")
                             .min_width(150.0)
+                            .max_width(200.0)
                             .resizable(false)
                             .show(ctx, |ui| {
                                 // let (size, texture) = self.ui.no_lyrics_image.unwrap();
@@ -517,23 +518,33 @@ impl eframe::App for Rpc {
                             UiState::Library => {
                                 match self.library {
                                     Some(_) => {
-                                        let node = self.ui.lib_pointer.as_ref().unwrap().borrow();
-                                        if node.parant.is_some() {
-                                            let button = egui::Button::new("..");
-                                            // todo!("change lib_pointer position");
-                                            // TODO change lib_pointer position
-                                            ui.add(button);
+                                        let mut cd: Option<Rc<RefCell<Node>>> = None;
+                                        {
+                                            let node = self.ui.lib_pointer.as_ref().unwrap().borrow();
+                                            if node.parant.is_some() {
+                                                let button = egui::Button::new("..");
+                                                // TODO change lib_pointer position
+                                                if ui.add(button).clicked() {
+                                                    cd = node.parant.as_ref().unwrap().clone().upgrade();
+                                                };
+                                            }
+                                            for dir in &node.nvec {
+                                                let bdir = dir.borrow();
+                                                let button = egui::Button::new(bdir.name.clone());
+                                                if ui.add(button).clicked() {
+                                                    cd = Some(dir.clone());
+                                                };
+                                                // TODO change lib_pointer position
+                                            }
+                                            for media in &node.mvec {
+                                                let button = egui::Button::new(media.file_stem.clone());
+                                                if ui.add(button).clicked() {
+                                                    self.current = Some(self.new_media_stream(media.path.to_string()));
+                                                };
+                                            }
                                         }
-                                        for dir in &node.nvec {
-                                            let bdir = dir.borrow();
-                                            let button = egui::Button::new(bdir.name.clone());
-                                            ui.add(button);
-                                            // TODO change lib_pointer position
-                                        }
-                                        for media in &node.mvec {
-                                            let button = egui::Button::new(media.file_stem.clone());
-                                            // TODO play track by click
-                                            ui.add(button);
+                                        if cd.is_some() {
+                                            self.ui.lib_pointer = cd;
                                         }
                                         }
                                     None => {
@@ -581,49 +592,50 @@ impl eframe::App for Rpc {
                         },
                     }
 
-                    preview_files_being_dropped(ctx);
+                    if matches!(self.ui.ui_state, UiState::Queue) {
+                        preview_files_being_dropped(ctx);
 
-                    if !ctx.input().raw.dropped_files.is_empty() {
-                        self.ui.dropped_files = ctx.input().raw.dropped_files.clone();
-                    }
-                    if !self.ui.dropped_files.is_empty() {
-                        self.ui.dropped_files.reverse();
-                        for file in &self.ui.dropped_files {
-                            // self.current = Some(self.new_media_stream(
-                            //     file.path.as_ref().unwrap().display().to_string(),
-                            // ));
-                            if file
-                                .path
-                                .as_ref()
-                                .unwrap()
-                                .display()
-                                .to_string()
-                                .ends_with(".flac")
-                                || file
-                                    .path
-                                    .as_ref()
-                                    .unwrap()
-                                    .display()
-                                    .to_string()
-                                    .ends_with(".mp3")
-                                || file
-                                    .path
-                                    .as_ref()
-                                    .unwrap()
-                                    .display()
-                                    .to_string()
-                                    .ends_with(".m4a")
-                            {
-                                self.queue.qu_vec.push(
-                                    <TrackMetadata as std::str::FromStr>::from_str(
-                                        &file.path.as_ref().unwrap().display().to_string(),
-                                    )
-                                    .unwrap(),
-                                );
-                            }
+                        if !ctx.input().raw.dropped_files.is_empty() {
+                            self.ui.dropped_files = ctx.input().raw.dropped_files.clone();
                         }
-                        self.ui.dropped_files = vec![];
-                    }
+                        if !self.ui.dropped_files.is_empty() {
+                            self.ui.dropped_files.reverse();
+                            for file in &self.ui.dropped_files {
+                                // self.current = Some(self.new_media_stream(
+                                //     file.path.as_ref().unwrap().display().to_string(),
+                                // ));
+                                if file
+                                    .path
+                                    .as_ref()
+                                    .unwrap()
+                                    .display()
+                                    .to_string()
+                                    .ends_with(".flac")
+                                    || file
+                                        .path
+                                        .as_ref()
+                                        .unwrap()
+                                        .display()
+                                        .to_string()
+                                        .ends_with(".mp3")
+                                    || file
+                                        .path
+                                        .as_ref()
+                                        .unwrap()
+                                        .display()
+                                        .to_string()
+                                        .ends_with(".m4a")
+                                {
+                                    self.queue.qu_vec.push(
+                                        <TrackMetadata as std::str::FromStr>::from_str(
+                                            &file.path.as_ref().unwrap().display().to_string(),
+                                        )
+                                        .unwrap(),
+                                    );
+                                }
+                            }
+                            self.ui.dropped_files = vec![];
+                        }}
                 });
         });
 

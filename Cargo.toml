@@ -7,6 +7,7 @@ edition = "2021"
 
 
 [dependencies]
+rayon = "*"
 eframe = "0.19.0"
 egui_extras = "0.19.0"
 libc = "*"
@@ -17,9 +18,9 @@ ringbuf = "0.2.6"
 itertools = "0.10.3"
 # using custom tui-rs version with changes from this fork https://github.com/Phoenix-Chen/tui-rs
 crossbeam = "*"
-symphonia = {version="*", features=["aac", "alac", "mp3", "isomp4"]}
+symphonia = { version = "*", features = ["aac", "alac", "mp3", "isomp4"] }
 rb = "0.4.0"
-audiotags= "*"
+audiotags = "*"
 flexi_logger = "0.22"
 log = "0.4"
 serde = { version = "*", features = ["derive"] }
@@ -27,8 +28,5 @@ serde_json = "*"
 image = { version = "*", features = ["jpeg", "png"] }
 
 
-
 [profile.dev]
 opt-level = 3
-
-
