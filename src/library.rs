@@ -28,7 +28,7 @@ impl Node {
         use walkdir::WalkDir;
 
         let mut node = Node::default();
-        node.name = path.split('.').last().unwrap().to_string();
+        node.name = path.split('\\').last().unwrap().to_string();
         let name = node.name.clone();
         if parent.is_some() {
             node.parant = parent;

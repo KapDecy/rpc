@@ -89,7 +89,7 @@ impl Rpc {
         BStart();
         let mut lib: Option<std::rc::Rc<std::cell::RefCell<library::Node>>> = None;
         // временная заглушка
-        let temp_lib_path = r"D:\From Torrent\Музыка\Jack Stauber";
+        let temp_lib_path = r"D:\From Torrent\Музыка";
         if Path::new(temp_lib_path).exists() {
             lib = Some(Node::from_path(temp_lib_path.to_string(), None));
         }
@@ -519,30 +519,32 @@ impl eframe::App for Rpc {
                                 match self.library {
                                     Some(_) => {
                                         let mut cd: Option<Rc<RefCell<Node>>> = None;
-                                        {
-                                            let node = self.ui.lib_pointer.as_ref().unwrap().borrow();
-                                            if node.parant.is_some() {
-                                                let button = egui::Button::new("..");
-                                                // TODO change lib_pointer position
-                                                if ui.add(button).clicked() {
-                                                    cd = node.parant.as_ref().unwrap().clone().upgrade();
-                                                };
+                                        egui::containers::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+                                            {
+                                                let node = self.ui.lib_pointer.as_ref().unwrap().borrow();
+                                                if node.parant.is_some() {
+                                                    let button = egui::Button::new("..");
+                                                    // TODO change lib_pointer position
+                                                    if ui.add(button).clicked() {
+                                                        cd = node.parant.as_ref().unwrap().clone().upgrade();
+                                                    };
+                                                }
+                                                for dir in &node.nvec {
+                                                    let bdir = dir.borrow();
+                                                    let button = egui::Button::new(bdir.name.clone());
+                                                    if ui.add(button).clicked() {
+                                                        cd = Some(dir.clone());
+                                                    };
+                                                    // TODO change lib_pointer position
+                                                }
+                                                for media in &node.mvec {
+                                                    let button = egui::Button::new(media.file_stem.clone());
+                                                    if ui.add(button).clicked() {
+                                                        self.current = Some(self.new_media_stream(media.path.to_string()));
+                                                    };
+                                                }
                                             }
-                                            for dir in &node.nvec {
-                                                let bdir = dir.borrow();
-                                                let button = egui::Button::new(bdir.name.clone());
-                                                if ui.add(button).clicked() {
-                                                    cd = Some(dir.clone());
-                                                };
-                                                // TODO change lib_pointer position
-                                            }
-                                            for media in &node.mvec {
-                                                let button = egui::Button::new(media.file_stem.clone());
-                                                if ui.add(button).clicked() {
-                                                    self.current = Some(self.new_media_stream(media.path.to_string()));
-                                                };
-                                            }
-                                        }
+                                        });
                                         if cd.is_some() {
                                             self.ui.lib_pointer = cd;
                                         }
